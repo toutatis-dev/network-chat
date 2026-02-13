@@ -222,6 +222,9 @@ class ChatApp:
         config_data = self.load_config_data()
         self.base_dir = config_data.get("path", DEFAULT_PATH)
         self.current_theme = config_data.get("theme", "default")
+        configured_name = str(config_data.get("username", "")).strip()
+        if configured_name:
+            self.name = configured_name
         self.current_room = self.sanitize_room_name(
             config_data.get("room", DEFAULT_ROOM)
         )
