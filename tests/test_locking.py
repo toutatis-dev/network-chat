@@ -39,7 +39,8 @@ def build_app(tmp_path: Path) -> chat.ChatApp:
     app.base_dir = str(tmp_path)
     app.rooms_root = str(tmp_path / "rooms")
     app.current_room = "general"
-    app.presence_file_id = "user"
+    app.client_id = "user1234abcd"
+    app.presence_file_id = app.client_id
     app.current_theme = "default"
     Path(app.rooms_root).mkdir(parents=True, exist_ok=True)
     app.ensure_locking_dependency = lambda: None

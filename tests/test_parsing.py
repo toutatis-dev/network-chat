@@ -11,13 +11,14 @@ import chat
 def app_instance(tmp_path):
     app = chat.ChatApp.__new__(chat.ChatApp)
     app.name = "TestUser"
+    app.client_id = "testuser1234"
     app.color = "green"
     app.status = ""
     app.current_room = "general"
     app.base_dir = str(tmp_path)
     app.rooms_root = str(tmp_path / "rooms")
     Path(app.rooms_root).mkdir(parents=True, exist_ok=True)
-    app.presence_file_id = app.sanitize_presence_id(app.name)
+    app.presence_file_id = app.client_id
     app.messages = []
     app.message_events = []
     app.online_users = {}
@@ -124,17 +125,31 @@ def test_command_clear_resets_local_history_and_search(app_instance):
 
 
 def test_sidebar_color_sanitization_falls_back_to_white(app_instance):
-    app_instance.online_users = {"alice": {"color": "bad-color", "status": ""}}
+    app_instance.online_users = {
+        "alice12345678": {
+            "name": "alice",
+            "client_id": "alice12345678",
+            "color": "bad-color",
+            "status": "",
+        }
+    }
     app_instance.update_sidebar()
     user_fragments = [
-        frag for frag in app_instance.sidebar_control.text if "● alice" in frag[1]
+        frag for frag in app_instance.sidebar_control.text if "* alice" in frag[1]
     ]
     assert user_fragments
     assert user_fragments[0][0] == "fg:white"
 
 
 def test_lex_line_highlights_mentions_and_search(app_instance):
-    app_instance.online_users = {"TestUser": {"color": "green", "status": ""}}
+    app_instance.online_users = {
+        "testuser1234": {
+            "name": "TestUser",
+            "client_id": "testuser1234",
+            "color": "green",
+            "status": "",
+        }
+    }
     app_instance.search_query = "hello"
     tokens = app_instance.lex_line("[12:00:00] TestUser: hello @TestUser")
     styles = [style for style, _ in tokens]

@@ -10,6 +10,7 @@ from typing import Any
 from datetime import datetime
 from threading import Thread
 from pathlib import Path
+from uuid import uuid4
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -49,6 +50,7 @@ LOCK_MAX_ATTEMPTS = 20
 LOCK_BACKOFF_BASE_SECONDS = 0.05
 LOCK_BACKOFF_MAX_SECONDS = 0.5
 MAX_PRESENCE_ID_LENGTH = 64
+CLIENT_ID_LENGTH = 12
 PRESENCE_REFRESH_INTERVAL_SECONDS = 1.0
 logger = logging.getLogger(__name__)
 
@@ -205,7 +207,8 @@ class ChatApp:
         self.running = True
         self.current_theme = "default"
         self.current_room = DEFAULT_ROOM
-        self.presence_file_id = self.sanitize_presence_id(self.name)
+        self.client_id = self.generate_client_id()
+        self.presence_file_id = self.client_id
 
         self.messages: list[str] = []
         self.message_events: list[dict[str, Any]] = []
@@ -222,6 +225,8 @@ class ChatApp:
         self.current_room = self.sanitize_room_name(
             config_data.get("room", DEFAULT_ROOM)
         )
+        self.client_id = self.normalize_client_id(config_data.get("client_id"))
+        self.presence_file_id = self.client_id
 
         if not self.base_dir or not os.path.exists(self.base_dir):
             self.base_dir = self.prompt_for_path()
@@ -329,6 +334,7 @@ class ChatApp:
                     "theme": self.current_theme,
                     "username": self.name,
                     "room": self.current_room,
+                    "client_id": self.client_id,
                 },
                 f,
             )
@@ -367,6 +373,16 @@ class ChatApp:
         cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(room).strip().lower())
         cleaned = cleaned.strip("-_")
         return cleaned or DEFAULT_ROOM
+
+    def generate_client_id(self) -> str:
+        return uuid4().hex[:CLIENT_ID_LENGTH]
+
+    def normalize_client_id(self, value: Any) -> str:
+        raw = str(value).strip().lower()
+        cleaned = re.sub(r"[^a-f0-9]", "", raw)
+        if len(cleaned) >= 8:
+            return cleaned[:CLIENT_ID_LENGTH]
+        return self.generate_client_id()
 
     def get_room_dir(self, room: str | None = None) -> Path:
         active_room = self.sanitize_room_name(room or self.current_room)
@@ -474,13 +490,22 @@ class ChatApp:
                 if now - path.stat().st_mtime < 30:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
+                    client_id = self.normalize_client_id(path.name)
                     if isinstance(data, dict):
-                        display_name = (
-                            str(data.get("name", path.name)).strip() or path.name
-                        )
-                        online[display_name] = data
+                        display_name = str(data.get("name", "Anonymous")).strip()
+                        if not display_name:
+                            display_name = "Anonymous"
+                        normalized = dict(data)
+                        normalized["name"] = display_name
+                        normalized["client_id"] = client_id
+                        online[client_id] = normalized
                     else:
-                        online[path.name] = {"color": "white", "status": ""}
+                        online[client_id] = {
+                            "name": "Anonymous",
+                            "color": "white",
+                            "status": "",
+                            "client_id": client_id,
+                        }
                 else:
                     path.unlink(missing_ok=True)
             except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -539,13 +564,26 @@ class ChatApp:
             ("", "\n"),
             ("", "\n"),
         ]
-        users = sorted(self.online_users.keys())
-        for idx, user in enumerate(users):
-            data = self.online_users[user]
+        users = sorted(
+            self.online_users.values(),
+            key=lambda data: (
+                str(data.get("name", "Anonymous")).lower(),
+                str(data.get("client_id", "")),
+            ),
+        )
+        name_counts: dict[str, int] = {}
+        for data in users:
+            name = self.sanitize_sidebar_text(data.get("name", "Anonymous"), 64)
+            name_counts[name] = name_counts.get(name, 0) + 1
+
+        for idx, data in enumerate(users):
             color = self.sanitize_sidebar_color(data.get("color", "white"))
-            display_name = self.sanitize_sidebar_text(user, 64)
+            display_name = self.sanitize_sidebar_text(data.get("name", "Anonymous"), 64)
+            client_id = self.sanitize_sidebar_text(data.get("client_id", ""), 12)
+            if name_counts.get(display_name, 0) > 1 and client_id:
+                display_name = f"{display_name} ({client_id[:4]})"
             status = self.sanitize_sidebar_text(data.get("status", ""), 80)
-            fragments.append((f"fg:{color}", f"● {display_name}"))
+            fragments.append((f"fg:{color}", f"* {display_name}"))
             if status:
                 fragments.append(("fg:#888888", f" [{status}]"))
             if idx < len(users) - 1:
@@ -696,8 +734,14 @@ class ChatApp:
         chat_match = re.match(r"^\[(\d{2}:\d{2}:\d{2})\] ([^:]+): (.*)$", line_text)
         if chat_match:
             ts, name, body = chat_match.groups()
-            user_data = self.online_users.get(name, {})
-            u_color = self.sanitize_sidebar_color(user_data.get("color", "white"))
+            u_color = "white"
+            for user_data in self.online_users.values():
+                online_name = self.sanitize_sidebar_text(user_data.get("name", ""), 64)
+                if online_name.lower() == name.lower():
+                    u_color = self.sanitize_sidebar_color(
+                        user_data.get("color", "white")
+                    )
+                    break
             tokens: list[tuple[str, str]] = [
                 ("class:timestamp", f"[{ts}] "),
                 (f"fg:{u_color} bold", name),
@@ -1016,7 +1060,7 @@ class ChatApp:
             self.name = user_input if user_input else saved_name
         else:
             self.name = input("Enter your name: ").strip() or "Anonymous"
-        self.presence_file_id = self.sanitize_presence_id(self.name)
+        self.presence_file_id = self.client_id
 
         self.save_config()
 

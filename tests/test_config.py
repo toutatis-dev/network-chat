@@ -13,7 +13,13 @@ def test_load_config_defaults_when_missing():
 
 def test_load_config_existing_with_room():
     mock_data = json.dumps(
-        {"theme": "nord", "username": "Tester", "path": "/tmp", "room": "dev"}
+        {
+            "theme": "nord",
+            "username": "Tester",
+            "path": "/tmp",
+            "room": "dev",
+            "client_id": "abc123def456",
+        }
     )
     with patch("os.path.exists", return_value=True):
         with patch("builtins.open", mock_open(read_data=mock_data)):
@@ -22,6 +28,7 @@ def test_load_config_existing_with_room():
     assert config["theme"] == "nord"
     assert config["username"] == "Tester"
     assert config["room"] == "dev"
+    assert config["client_id"] == "abc123def456"
 
 
 def test_save_config_writes_room():
@@ -30,6 +37,7 @@ def test_save_config_writes_room():
     app.current_theme = "matrix"
     app.name = "Neo"
     app.current_room = "ops"
+    app.client_id = "abc123def456"
 
     with patch("builtins.open", mock_open()) as mocked_file:
         app.save_config()
@@ -43,6 +51,7 @@ def test_save_config_writes_room():
     assert payload["theme"] == "matrix"
     assert payload["username"] == "Neo"
     assert payload["room"] == "ops"
+    assert payload["client_id"] == "abc123def456"
 
 
 def test_load_config_invalid_json_logs_warning(caplog):

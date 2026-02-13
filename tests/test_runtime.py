@@ -38,6 +38,7 @@ class FakePortalocker:
 def build_runtime_app(tmp_path: Path) -> chat.ChatApp:
     app = chat.ChatApp.__new__(chat.ChatApp)
     app.name = "RuntimeUser"
+    app.client_id = "runtime1234ab"
     app.status = "online"
     app.color = "green"
     app.running = True
@@ -45,7 +46,7 @@ def build_runtime_app(tmp_path: Path) -> chat.ChatApp:
     app.current_theme = "default"
     app.base_dir = str(tmp_path)
     app.rooms_root = str(tmp_path / "rooms")
-    app.presence_file_id = app.sanitize_presence_id(app.name)
+    app.presence_file_id = app.client_id
     app.messages = []
     app.message_events = []
     app.last_pos_by_room = {}
@@ -89,7 +90,31 @@ def test_force_heartbeat_writes_presence_data(tmp_path):
     assert payload["name"] == "RuntimeUser"
     assert payload["status"] == "online"
     assert payload["color"] == "green"
-    assert "RuntimeUser" in app.get_online_users("general")
+    online_users = app.get_online_users("general")
+    assert any(user.get("name") == "RuntimeUser" for user in online_users.values())
+
+
+def test_get_online_users_keeps_duplicate_display_names(tmp_path):
+    app = build_runtime_app(tmp_path)
+    presence_dir = app.get_presence_dir("general")
+    presence_dir.mkdir(parents=True, exist_ok=True)
+
+    (presence_dir / "abc11111aaaa").write_text(
+        json.dumps({"name": "Alex", "color": "green", "status": "one"}),
+        encoding="utf-8",
+    )
+    (presence_dir / "def22222bbbb").write_text(
+        json.dumps({"name": "Alex", "color": "cyan", "status": "two"}),
+        encoding="utf-8",
+    )
+
+    online_users = app.get_online_users("general")
+    assert len(online_users) == 2
+    assert {user["client_id"] for user in online_users.values()} == {
+        "abc11111aaaa",
+        "def22222bbbb",
+    }
+    assert all(user["name"] == "Alex" for user in online_users.values())
 
 
 def test_monitor_messages_logs_and_recovers_from_oserror(tmp_path, monkeypatch, caplog):
