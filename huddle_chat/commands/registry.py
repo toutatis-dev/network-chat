@@ -26,8 +26,10 @@ class CommandRegistry:
             "/agent": self.command_agent,
             "/memory": self.command_memory,
             "/actions": self.command_actions,
+            "/action": self.command_action,
             "/approve": self.command_approve,
             "/deny": self.command_deny,
+            "/toolpaths": self.command_toolpaths,
             "/search": self.command_search,
             "/next": self.command_next,
             "/prev": self.command_prev,
@@ -98,6 +100,13 @@ class CommandRegistry:
     def command_actions(self, _args: str) -> None:
         self.app.append_system_message(self.app.get_pending_actions_text())
 
+    def command_action(self, args: str) -> None:
+        action_id = args.strip()
+        if not action_id:
+            self.app.append_system_message("Usage: /action <action-id>")
+            return
+        self.app.append_system_message(self.app.get_action_details(action_id))
+
     def command_approve(self, args: str) -> None:
         action_id = args.strip()
         if not action_id:
@@ -117,6 +126,9 @@ class CommandRegistry:
         self.app.append_system_message(msg)
         if ok:
             self.app.refresh_output_from_events()
+
+    def command_toolpaths(self, args: str) -> None:
+        self.app.handle_toolpaths_command(args)
 
     def command_search(self, args: str) -> None:
         query = args.strip()

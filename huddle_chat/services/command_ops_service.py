@@ -308,3 +308,45 @@ class CommandOpsService:
             return
 
         self.app.append_system_message("Unknown /agent command. Use /agent help.")
+
+    def handle_toolpaths_command(self, args: str) -> None:
+        trimmed = args.strip()
+        if not trimmed or trimmed.lower() == "list":
+            paths = self.app.get_tool_paths()
+            if not paths:
+                self.app.append_system_message("Tool paths: (none)")
+                return
+            self.app.append_system_message(
+                "Tool paths:\n" + "\n".join(f"- {path}" for path in paths)
+            )
+            return
+        try:
+            tokens = shlex.split(trimmed)
+        except ValueError:
+            self.app.append_system_message("Invalid /toolpaths syntax. Check quotes.")
+            return
+        if not tokens:
+            self.app.append_system_message(
+                "Usage: /toolpaths <list|add <path>|remove <path>>"
+            )
+            return
+        action = tokens[0].lower()
+        if action == "add":
+            if len(tokens) < 2:
+                self.app.append_system_message("Usage: /toolpaths add <absolute-path>")
+                return
+            ok, msg = self.app.add_tool_path(tokens[1])
+            self.app.append_system_message(msg)
+            return
+        if action == "remove":
+            if len(tokens) < 2:
+                self.app.append_system_message(
+                    "Usage: /toolpaths remove <absolute-path>"
+                )
+                return
+            ok, msg = self.app.remove_tool_path(tokens[1])
+            self.app.append_system_message(msg)
+            return
+        self.app.append_system_message(
+            "Usage: /toolpaths <list|add <path>|remove <path>>"
+        )

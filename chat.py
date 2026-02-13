@@ -66,6 +66,7 @@ from huddle_chat.services import (
     RoutingService,
     RuntimeService,
     StorageService,
+    ToolService,
 )
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
@@ -173,6 +174,7 @@ class ChatApp:
         self.agent_service = AgentService(self)
         self.routing_service = RoutingService(self)
         self.action_service = ActionService(self)
+        self.tool_service = ToolService(self)
         self.command_ops_service = CommandOpsService(self)
         self.runtime_service = RuntimeService(self)
         self.ai_provider_clients: dict[str, ProviderClient] = {
@@ -193,6 +195,12 @@ class ChatApp:
         self.client_id = self.normalize_client_id(config_data.get("client_id"))
         self.active_agent_profile_id = self.sanitize_agent_id(
             config_data.get("agent_profile", "default")
+        )
+        raw_tool_paths = config_data.get("tool_paths", [])
+        self.tool_paths = (
+            [str(path).strip() for path in raw_tool_paths if str(path).strip()]
+            if isinstance(raw_tool_paths, list)
+            else []
         )
         self.presence_file_id = self.client_id
 
@@ -326,6 +334,7 @@ class ChatApp:
                     "agent_profile": getattr(
                         self, "active_agent_profile_id", "default"
                     ),
+                    "tool_paths": list(getattr(self, "tool_paths", [])),
                 },
                 f,
             )
@@ -379,6 +388,9 @@ class ChatApp:
         if len(cleaned) >= 8:
             return cleaned[:CLIENT_ID_LENGTH]
         return self.generate_client_id()
+
+    def is_windows(self) -> bool:
+        return os.name == "nt"
 
     def is_local_room(self, room: str | None = None) -> bool:
         active_room = self.sanitize_room_name(room or self.current_room)
@@ -1063,6 +1075,8 @@ class ChatApp:
             self.routing_service = RoutingService(self)
         if not hasattr(self, "action_service"):
             self.action_service = ActionService(self)
+        if not hasattr(self, "tool_service"):
+            self.tool_service = ToolService(self)
         if not hasattr(self, "command_ops_service"):
             self.command_ops_service = CommandOpsService(self)
         if not hasattr(self, "runtime_service"):
@@ -1076,6 +1090,8 @@ class ChatApp:
             self.pending_actions = {}
         if not hasattr(self, "active_agent_profile_id"):
             self.active_agent_profile_id = "default"
+        if not hasattr(self, "tool_paths"):
+            self.tool_paths = []
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1222,6 +1238,11 @@ class ChatApp:
         summary: str,
         command_preview: str,
         risk_level: str = "med",
+        request_id: str = "",
+        room: str = "",
+        inputs: dict[str, Any] | None = None,
+        ttl_seconds: int = 0,
+        expires_at: str = "",
     ) -> str:
         self.ensure_services_initialized()
         return self.action_service.create_pending_action(
@@ -1229,6 +1250,11 @@ class ChatApp:
             summary=summary,
             command_preview=command_preview,
             risk_level=risk_level,
+            request_id=request_id,
+            room=room,
+            inputs=inputs,
+            ttl_seconds=ttl_seconds,
+            expires_at=expires_at,
         )
 
     def decide_action(self, action_id: str, decision: str) -> tuple[bool, str]:
@@ -1238,6 +1264,48 @@ class ChatApp:
     def get_pending_actions_text(self) -> str:
         self.ensure_services_initialized()
         return self.action_service.format_pending_actions()
+
+    def get_action_details(self, action_id: str) -> str:
+        self.ensure_services_initialized()
+        return self.action_service.get_action_details(action_id)
+
+    def handle_toolpaths_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.command_ops_service.handle_toolpaths_command(args)
+
+    def get_tool_paths(self) -> list[str]:
+        paths: list[str] = []
+        for value in getattr(self, "tool_paths", []):
+            text = str(value).strip()
+            if text and text not in paths:
+                paths.append(text)
+        return paths
+
+    def add_tool_path(self, path_text: str) -> tuple[bool, str]:
+        path = Path(path_text).expanduser()
+        if not path.is_absolute():
+            return False, "Tool path must be absolute."
+        normalized = str(path.resolve())
+        current = self.get_tool_paths()
+        if normalized in current:
+            return False, "Tool path already exists."
+        current.append(normalized)
+        self.tool_paths = current
+        self.save_config()
+        return True, f"Added tool path: {normalized}"
+
+    def remove_tool_path(self, path_text: str) -> tuple[bool, str]:
+        path = Path(path_text).expanduser()
+        if not path.is_absolute():
+            return False, "Tool path must be absolute."
+        normalized = str(path.resolve())
+        current = self.get_tool_paths()
+        if normalized not in current:
+            return False, "Tool path not found."
+        current = [value for value in current if value != normalized]
+        self.tool_paths = current
+        self.save_config()
+        return True, f"Removed tool path: {normalized}"
 
     def ensure_memory_state_initialized(self) -> None:
         self.ensure_services_initialized()

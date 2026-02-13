@@ -23,6 +23,7 @@ class AIService:
         model_override: str | None = None
         is_private = False
         disable_memory = False
+        action_mode = False
         memory_scope_override: list[str] = []
         prompt_parts: list[str] = []
         i = 0
@@ -46,6 +47,10 @@ class AIService:
                 continue
             if token == "--no-memory":
                 disable_memory = True
+                i += 1
+                continue
+            if token == "--act":
+                action_mode = True
                 i += 1
                 continue
             if token == "--memory-scope":
@@ -72,7 +77,7 @@ class AIService:
             return (
                 {},
                 "Usage: /ai [--provider <name>] [--model <name>] [--private] "
-                "[--no-memory] [--memory-scope <private|repo|team[,..]>] <prompt>",
+                "[--no-memory] [--memory-scope <private|repo|team[,..]>] [--act] <prompt>",
             )
 
         return {
@@ -80,6 +85,7 @@ class AIService:
             "model_override": model_override,
             "is_private": is_private,
             "disable_memory": disable_memory,
+            "action_mode": action_mode,
             "prompt": prompt,
             "memory_scope_override": memory_scope_override,
         }, None
@@ -217,6 +223,7 @@ class AIService:
         model = route["model"]
         prompt = parsed["prompt"]
         disable_memory = bool(parsed.get("disable_memory"))
+        action_mode = bool(parsed.get("action_mode"))
         is_private = bool(parsed.get("is_private")) or self.app.is_local_room()
         target_room = AI_DM_ROOM if is_private else self.app.current_room
         scope = "private" if is_private else "room"
@@ -269,6 +276,7 @@ class AIService:
                 target_room,
                 is_private,
                 disable_memory,
+                action_mode,
                 memory_scopes,
             ),
         ).start()
@@ -286,6 +294,7 @@ class AIService:
         target_room: str,
         is_private: bool,
         disable_memory: bool,
+        action_mode: bool,
         memory_scopes: list[str],
     ) -> None:
         effective_prompt = prompt
@@ -352,6 +361,49 @@ class AIService:
             return
         assert answer is not None
 
+        action_warning: str | None = None
+        action_ids: list[str] = []
+        if action_mode:
+            tools_json = self.app.tool_service.build_tools_prompt_block()
+            action_prompt = (
+                "Return strict JSON only with keys: answer, proposed_actions. "
+                "proposed_actions must be a list of objects with keys: tool, arguments, summary. "
+                "Only propose tools from the provided list.\n\n"
+                f"Available tools:\n{tools_json}\n\n"
+                f"User prompt:\n{prompt}\n\n"
+                f"Draft answer:\n{answer}"
+            )
+            action_raw, action_error = self.run_ai_request_with_retry(
+                request_id=request_id,
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                prompt=action_prompt,
+            )
+            if action_error:
+                action_warning = f"Action proposal failed: {action_error}"
+            else:
+                assert action_raw is not None
+                parsed_answer, proposals, parse_warning = (
+                    self.app.tool_service.parse_ai_action_response(action_raw)
+                )
+                if parse_warning:
+                    action_warning = parse_warning
+                if parsed_answer:
+                    answer = parsed_answer
+                for proposal in proposals:
+                    ok, result = self.app.tool_service.create_action_from_proposal(
+                        request_id=request_id,
+                        room=target_room,
+                        tool=str(proposal.get("tool", "")),
+                        arguments=proposal.get("arguments", {}),
+                        summary=str(proposal.get("summary", "")),
+                    )
+                    if ok:
+                        action_ids.append(result)
+                    elif not action_warning:
+                        action_warning = result
+
         if self.app.is_ai_request_cancelled(request_id):
             canceled_event = self.app.build_event("system", "AI request cancelled.")
             canceled_event["request_id"] = request_id
@@ -377,6 +429,17 @@ class AIService:
             memory_event = self.app.build_event("system", ids_line)
             memory_event["request_id"] = request_id
             self.app.write_to_file(memory_event, room=target_room)
+        if action_ids:
+            actions_event = self.app.build_event(
+                "system",
+                f"Proposed actions: {', '.join(action_ids)}. Use /actions then /approve <id>.",
+            )
+            actions_event["request_id"] = request_id
+            self.app.write_to_file(actions_event, room=target_room)
+        if action_warning:
+            warn_event = self.app.build_event("system", action_warning)
+            warn_event["request_id"] = request_id
+            self.app.write_to_file(warn_event, room=target_room)
 
         if is_private and not self.app.is_local_room():
             self.app.append_system_message(

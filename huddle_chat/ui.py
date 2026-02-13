@@ -65,6 +65,7 @@ class SlashCompleter(Completer):
                     "--private",
                     "--no-memory",
                     "--memory-scope",
+                    "--act",
                 ],
                 {
                     "status": "Show active AI request",
@@ -74,6 +75,7 @@ class SlashCompleter(Completer):
                     "--private": "Run AI privately in ai-dm",
                     "--no-memory": "Disable shared memory for this call",
                     "--memory-scope": "Limit memory scopes: private,repo,team",
+                    "--act": "Ask AI to propose approval-gated tool actions",
                 },
             )
 
@@ -105,6 +107,7 @@ class SlashCompleter(Completer):
                     "--private",
                     "--no-memory",
                     "--memory-scope",
+                    "--act",
                 ],
                 {
                     "status": "Show active AI request",
@@ -114,6 +117,7 @@ class SlashCompleter(Completer):
                     "--private": "Run AI privately in ai-dm",
                     "--no-memory": "Disable shared memory for this call",
                     "--memory-scope": "Limit memory scopes: private,repo,team",
+                    "--act": "Ask AI to propose approval-gated tool actions",
                 },
             )
         return []
@@ -224,6 +228,17 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, self._provider_names())
         return []
 
+    def _complete_toolpaths_command(self, text: str):
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/toolpaths"])
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, ["list", "add", "remove"])
+        return []
+
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if re.match(r"^/aiconfig(\s|$)", text):
@@ -236,6 +251,10 @@ class SlashCompleter(Completer):
 
         if re.match(r"^/agent(\s|$)", text):
             yield from self._complete_agent_command(text)
+            return
+
+        if re.match(r"^/toolpaths(\s|$)", text):
+            yield from self._complete_toolpaths_command(text)
             return
 
         if re.match(r"^/ai(\s|$)", text):
@@ -281,8 +300,10 @@ class SlashCompleter(Completer):
                 ("/memory", "Draft and manage shared memory entries"),
                 ("/share", "Share AI DM messages into a room"),
                 ("/actions", "Show pending approval actions"),
+                ("/action", "Show action details by id"),
                 ("/approve", "Approve an action by id"),
                 ("/deny", "Deny an action by id"),
+                ("/toolpaths", "Manage allowed external tool paths"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
             ]
