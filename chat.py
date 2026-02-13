@@ -706,30 +706,84 @@ class ChatApp:
             if not path.is_file():
                 continue
             try:
-                if now - path.stat().st_mtime < 30:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    client_id = self.normalize_client_id(path.name)
-                    if isinstance(data, dict):
-                        display_name = str(data.get("name", "Anonymous")).strip()
-                        if not display_name:
-                            display_name = "Anonymous"
-                        normalized = dict(data)
-                        normalized["name"] = display_name
-                        normalized["client_id"] = client_id
-                        online[client_id] = normalized
-                    else:
-                        online[client_id] = {
-                            "name": "Anonymous",
-                            "color": "white",
-                            "status": "",
-                            "client_id": client_id,
-                        }
-                else:
+                st_mtime = path.stat().st_mtime
+                if now - st_mtime >= 30:
                     path.unlink(missing_ok=True)
+                    continue
+                entry = self.load_presence_entry(
+                    path, fallback_room=room, st_mtime=st_mtime
+                )
+                if entry is not None:
+                    client_id = str(entry.get("client_id", ""))
+                    online[client_id] = entry
             except (OSError, json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to process presence file %s: %s", path, exc)
 
+        return online
+
+    def load_presence_entry(
+        self, path: Path, fallback_room: str | None, st_mtime: float
+    ) -> dict[str, Any] | None:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        client_id = self.normalize_client_id(path.name)
+        if isinstance(data, dict):
+            display_name = str(data.get("name", "Anonymous")).strip()
+            if not display_name:
+                display_name = "Anonymous"
+            room_name = self.sanitize_room_name(
+                str(data.get("room", fallback_room or self.current_room))
+            )
+            normalized = dict(data)
+            normalized["name"] = display_name
+            normalized["client_id"] = client_id
+            normalized["room"] = room_name
+            if "last_seen" not in normalized:
+                normalized["last_seen"] = st_mtime
+            return normalized
+        return {
+            "name": "Anonymous",
+            "color": "white",
+            "status": "",
+            "client_id": client_id,
+            "room": self.sanitize_room_name(fallback_room or self.current_room),
+            "last_seen": st_mtime,
+        }
+
+    def get_online_users_all_rooms(self) -> dict[str, dict[str, Any]]:
+        online: dict[str, dict[str, Any]] = {}
+        now = time.time()
+        root = Path(self.rooms_root)
+        if not root.exists():
+            return online
+        for room_dir in root.iterdir():
+            if not room_dir.is_dir():
+                continue
+            room = self.sanitize_room_name(room_dir.name)
+            presence_dir = room_dir / "presence"
+            if not presence_dir.exists() or not presence_dir.is_dir():
+                continue
+            for path in presence_dir.iterdir():
+                if not path.is_file():
+                    continue
+                try:
+                    st_mtime = path.stat().st_mtime
+                    if now - st_mtime >= 30:
+                        path.unlink(missing_ok=True)
+                        continue
+                    entry = self.load_presence_entry(
+                        path, fallback_room=room, st_mtime=st_mtime
+                    )
+                    if entry is None:
+                        continue
+                    client_id = str(entry.get("client_id", ""))
+                    seen = online.get(client_id)
+                    current_seen = float(entry.get("last_seen", st_mtime))
+                    prior_seen = float(seen.get("last_seen", 0.0)) if seen else 0.0
+                    if seen is None or current_seen >= prior_seen:
+                        online[client_id] = entry
+                except (OSError, json.JSONDecodeError, ValueError) as exc:
+                    logger.warning("Failed to process presence file %s: %s", path, exc)
         return online
 
     def heartbeat(self) -> None:
@@ -773,6 +827,7 @@ class ChatApp:
                     "color": self.color,
                     "last_seen": time.time(),
                     "status": self.status,
+                    "room": room,
                 }
                 with open(presence_path, "w", encoding="utf-8") as f:
                     json.dump(data, f)
@@ -792,16 +847,11 @@ class ChatApp:
                 )
 
     def update_sidebar(self) -> None:
+        room_label = f"Room: #{self.current_room}"
         if self.is_local_room():
-            self.sidebar_control.text = [
-                ("fg:#aaaaaa", f"Room: #{self.current_room} (local)"),
-                ("", "\n"),
-                ("fg:#888888", "Private AI DM"),
-            ]
-            self.application.invalidate()
-            return
+            room_label += " (local)"
         fragments: list[tuple[str, str]] = [
-            ("fg:#aaaaaa", f"Room: #{self.current_room}"),
+            ("fg:#aaaaaa", room_label),
             ("", "\n"),
             ("", "\n"),
         ]
@@ -824,16 +874,19 @@ class ChatApp:
             if name_counts.get(display_name, 0) > 1 and client_id:
                 display_name = f"{display_name} ({client_id[:4]})"
             status = self.sanitize_sidebar_text(data.get("status", ""), 80)
+            user_room = self.sanitize_sidebar_text(data.get("room", ""), 32)
             fragments.append((f"fg:{color}", f"* {display_name}"))
             if status:
                 fragments.append(("fg:#888888", f" [{status}]"))
+            if user_room:
+                fragments.append(("fg:#888888", f" #{user_room}"))
             if idx < len(users) - 1:
                 fragments.append(("", "\n"))
         self.sidebar_control.text = fragments
         self.application.invalidate()
 
     def refresh_presence_sidebar(self) -> None:
-        self.online_users = self.get_online_users()
+        self.online_users = self.get_online_users_all_rooms()
         self.update_sidebar()
 
     def sanitize_sidebar_text(self, value: Any, max_len: int) -> str:
@@ -1598,6 +1651,7 @@ class ChatApp:
                 "color": self.color,
                 "last_seen": time.time(),
                 "status": self.status,
+                "room": self.current_room,
             }
             with open(presence_path, "w", encoding="utf-8") as f:
                 json.dump(data, f)

@@ -90,6 +90,7 @@ def test_force_heartbeat_writes_presence_data(tmp_path):
     assert payload["name"] == "RuntimeUser"
     assert payload["status"] == "online"
     assert payload["color"] == "green"
+    assert payload["room"] == "general"
     online_users = app.get_online_users("general")
     assert any(user.get("name") == "RuntimeUser" for user in online_users.values())
 
@@ -115,6 +116,46 @@ def test_get_online_users_keeps_duplicate_display_names(tmp_path):
         "def22222bbbb",
     }
     assert all(user["name"] == "Alex" for user in online_users.values())
+
+
+def test_get_online_users_all_rooms_includes_room_metadata(tmp_path):
+    app = build_runtime_app(tmp_path)
+    general_presence = app.get_presence_dir("general")
+    dev_presence = app.get_presence_dir("dev")
+    general_presence.mkdir(parents=True, exist_ok=True)
+    dev_presence.mkdir(parents=True, exist_ok=True)
+
+    (general_presence / "aaa11111bbbb").write_text(
+        json.dumps({"name": "Alice", "color": "green", "status": "online"}),
+        encoding="utf-8",
+    )
+    (dev_presence / "ccc22222dddd").write_text(
+        json.dumps({"name": "Bob", "color": "cyan", "status": "busy"}),
+        encoding="utf-8",
+    )
+
+    online_users = app.get_online_users_all_rooms()
+    assert len(online_users) == 2
+    assert online_users["aaa11111bbbb"]["room"] == "general"
+    assert online_users["ccc22222dddd"]["room"] == "dev"
+
+
+def test_update_sidebar_shows_user_room_suffix(tmp_path):
+    app = build_runtime_app(tmp_path)
+    app.online_users = {
+        "aaa11111bbbb": {
+            "name": "Alice",
+            "client_id": "aaa11111bbbb",
+            "color": "green",
+            "status": "online",
+            "room": "dev",
+        }
+    }
+
+    app.update_sidebar()
+
+    rendered_text = "".join(fragment[1] for fragment in app.sidebar_control.text)
+    assert "#dev" in rendered_text
 
 
 def test_monitor_messages_logs_and_recovers_from_oserror(tmp_path, monkeypatch, caplog):
