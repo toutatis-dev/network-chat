@@ -48,6 +48,8 @@ from huddle_chat.constants import (
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
     THEMES,
 )
+from huddle_chat.commands.registry import CommandRegistry
+from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
 from huddle_chat.services import (
     AIService,
     MemoryService,
@@ -154,6 +156,10 @@ class ChatApp:
         self.memory_service = MemoryService(self)
         self.ai_service = AIService(self)
         self.runtime_service = RuntimeService(self)
+        self.ai_provider_clients: dict[str, ProviderClient] = {
+            "gemini": GeminiClient(),
+            "openai": OpenAIClient(),
+        }
 
         # Load Config
         config_data = self.load_config_data()
@@ -442,11 +448,16 @@ class ChatApp:
     def call_ai_provider(
         self, provider: str, api_key: str, model: str, prompt: str
     ) -> str:
-        if provider == "gemini":
-            return self.call_gemini_api(api_key, model, prompt)
-        if provider == "openai":
-            return self.call_openai_api(api_key, model, prompt)
-        raise ValueError(f"Unsupported provider '{provider}'")
+        self.ensure_services_initialized()
+        client = self.ai_provider_clients.get(provider)
+        if client is None:
+            raise ValueError(f"Unsupported provider '{provider}'")
+        return client.generate(
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            post_json_request=self.post_json_request,
+        )
 
     def post_json_request(
         self, url: str, headers: dict[str, str], payload: dict[str, Any]
@@ -476,52 +487,20 @@ class ChatApp:
             raise RuntimeError(f"Provider request failed: {exc}") from exc
 
     def call_gemini_api(self, api_key: str, model: str, prompt: str) -> str:
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:"
-            f"generateContent?key={api_key}"
+        return GeminiClient().generate(
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            post_json_request=self.post_json_request,
         )
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        data = self.post_json_request(url, {}, payload)
-        candidates = data.get("candidates", [])
-        if not isinstance(candidates, list) or not candidates:
-            raise RuntimeError("Gemini returned no candidates.")
-        first = candidates[0]
-        if not isinstance(first, dict):
-            raise RuntimeError("Gemini response format was invalid.")
-        content = first.get("content", {})
-        if not isinstance(content, dict):
-            raise RuntimeError("Gemini response content missing.")
-        parts = content.get("parts", [])
-        if not isinstance(parts, list) or not parts:
-            raise RuntimeError("Gemini returned empty content.")
-        for part in parts:
-            if isinstance(part, dict):
-                text = str(part.get("text", "")).strip()
-                if text:
-                    return text
-        raise RuntimeError("Gemini response did not contain text.")
 
     def call_openai_api(self, api_key: str, model: str, prompt: str) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        headers = {"Authorization": f"Bearer {api_key}"}
-        data = self.post_json_request(url, headers, payload)
-        choices = data.get("choices", [])
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("OpenAI returned no choices.")
-        first = choices[0]
-        if not isinstance(first, dict):
-            raise RuntimeError("OpenAI response format was invalid.")
-        message = first.get("message", {})
-        if not isinstance(message, dict):
-            raise RuntimeError("OpenAI response message missing.")
-        text = str(message.get("content", "")).strip()
-        if not text:
-            raise RuntimeError("OpenAI response was empty.")
-        return text
+        return OpenAIClient().generate(
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            post_json_request=self.post_json_request,
+        )
 
     def get_room_dir(self, room: str | None = None) -> Path:
         active_room = self.sanitize_room_name(room or self.current_room)
@@ -999,6 +978,11 @@ class ChatApp:
             self.ai_service = AIService(self)
         if not hasattr(self, "runtime_service"):
             self.runtime_service = RuntimeService(self)
+        if not hasattr(self, "ai_provider_clients"):
+            self.ai_provider_clients = {
+                "gemini": GeminiClient(),
+                "openai": OpenAIClient(),
+            }
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1471,27 +1455,7 @@ class ChatApp:
         )
 
     def build_command_handlers(self) -> dict[str, Any]:
-        return {
-            "/theme": self.command_theme,
-            "/setpath": self.command_setpath,
-            "/status": self.command_status,
-            "/join": self.command_join,
-            "/rooms": self.command_rooms,
-            "/room": self.command_room,
-            "/aiproviders": self.command_aiproviders,
-            "/aiconfig": self.command_aiconfig,
-            "/ai": self.command_ai,
-            "/share": self.command_share,
-            "/memory": self.command_memory,
-            "/search": self.command_search,
-            "/next": self.command_next,
-            "/prev": self.command_prev,
-            "/clearsearch": self.command_clearsearch,
-            "/exit": self.command_exit,
-            "/quit": self.command_exit,
-            "/clear": self.command_clear,
-            "/me": self.command_me,
-        }
+        return CommandRegistry(self).build()
 
     def command_theme(self, args: str) -> None:
         if not args:
