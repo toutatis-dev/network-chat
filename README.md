@@ -6,14 +6,14 @@ A lightweight, serverless chat application designed for local networks. It uses 
 
 *   **Serverless:** Relies entirely on a shared network folder for data sync.
 *   **Zero Config Client:** Just run the script, point it to the shared folder, and chat.
-*   **Cross-Platform Core:** Built with Python, running natively on Windows.
+*   **Cross-Platform Core:** Built with Python, running on Windows, Linux, and macOS.
 *   **TUI Interface:** Professional split-screen terminal interface.
 *   **Real-time Presence:** See who is online in the sidebar.
 *   **Themes:** Switch between multiple color themes (Default, Nord, Matrix, Solarized, Monokai).
 *   **Persistent Identity:** Remembers your username and settings.
 *   **Cross-Platform File Locking:** Uses robust write locking for shared chat files on Windows and Linux.
 
-## Quick Start (Windows)
+## Quick Start
 
 1.  **Clone the Repository:**
     Open Command Prompt or PowerShell and run:
@@ -22,9 +22,10 @@ A lightweight, serverless chat application designed for local networks. It uses 
     cd network-chat
     ```
 
-2.  **Run:** Double-click `run_chat.bat` (or run it from the command line).
-    *   The script will automatically detect if Python is installed.
-    *   It will create a virtual environment and install all dependencies for you.
+2.  **Run:**
+    *   **Windows:** Double-click `run_chat.bat` (or run from Command Prompt/PowerShell).
+    *   **Linux/macOS:** Run `./run_chat.sh` from your terminal.
+    *   Launchers auto-detect Python, create a virtual environment, and install runtime dependencies.
 
 3.  **Setup:**
     *   On the first launch, you will be asked for the **Server Path**.
@@ -92,12 +93,20 @@ Canonical shared-file contract docs:
 *   **Python 3.x** must be installed and added to your system PATH.
 *   A shared network folder that all users can read/write to.
 
+## Supported Platforms
+
+*   **Windows:** officially supported
+*   **Linux:** officially supported
+*   **macOS:** officially supported
+
 ## Development
 
 This project uses a comprehensive suite of quality checks to maintain code resilience and professionalism.
 
 ### Project Layout
+*   `run_chat.bat` / `run_chat.sh` - cross-platform launchers.
 *   `chat.py` - application entrypoint/orchestration.
+*   `huddle_chat/bootstrap.py` - shared venv/dependency bootstrap used by launchers and CI preflight.
 *   `huddle_chat/constants.py` - shared constants, themes, and defaults.
 *   `huddle_chat/ui.py` - prompt-toolkit completer/lexer UI components.
 *   `huddle_chat/services/` - extracted domain services (`ai`, `command_ops`, `memory`, `storage`, `runtime`).
@@ -125,5 +134,11 @@ You should run the unified check script before committing any changes to ensure 
     ./check.sh
     ```
 
+### Dependency Files
+*   `requirements.in` - runtime dependency source list.
+*   `requirements.txt` - pinned runtime lock file used by launchers.
+*   `requirements-dev.in` - dev dependency source list.
+*   `requirements-dev.txt` - pinned dev lock file used by check scripts and CI.
+
 ### Continuous Integration
-All pushes and pull requests are automatically verified via **GitHub Actions** on Ubuntu using Python 3.13.
+All pushes and pull requests are automatically verified via **GitHub Actions** on Windows, Linux, and macOS using Python 3.13.
