@@ -191,7 +191,11 @@ class ChatApp:
 
     def save_config(self):
         with open(CONFIG_FILE, 'w') as f:
-            json.dump({'path': self.base_dir, 'theme': self.current_theme}, f)
+            json.dump({
+                'path': self.base_dir, 
+                'theme': self.current_theme,
+                'username': self.name
+            }, f)
 
     def get_style(self):
         theme_dict = THEMES.get(self.current_theme, THEMES['default'])
@@ -412,7 +416,19 @@ class ChatApp:
 
     def run(self):
         print(f"Connecting to: {self.base_dir}")
-        self.name = input("Enter your name: ").strip() or "Anonymous"
+        
+        # Load persisted username
+        config_data = self.load_config_data()
+        saved_name = config_data.get('username', '')
+
+        if saved_name:
+            user_input = input(f"Enter your name [Default: {saved_name}]: ").strip()
+            self.name = user_input if user_input else saved_name
+        else:
+            self.name = input("Enter your name: ").strip() or "Anonymous"
+        
+        # Save config immediately to persist the name (or update it)
+        self.save_config()
         
         online = self.get_online_users()
         taken = set()
