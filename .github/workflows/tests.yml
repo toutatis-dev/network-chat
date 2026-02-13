@@ -27,9 +27,18 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements-dev.txt
 
-    - name: Launcher Preflight
+    - name: Launcher Smoke (POSIX)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
-        python -m huddle_chat.bootstrap --base-dir . --requirements requirements.txt --preflight
+        chmod +x run_chat.sh
+        ./run_chat.sh --preflight
+
+    - name: Launcher Smoke (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        cmd /c run_chat.bat --preflight
 
     - name: Run Quality Checks (POSIX)
       if: runner.os != 'Windows'

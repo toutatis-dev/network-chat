@@ -23,7 +23,7 @@ IF NOT DEFINED PY_CMD (
 IF NOT DEFINED PY_CMD GOTO ERROR_NO_PYTHON
 
 cd /d "%BASE_DIR%"
-%PY_CMD% -m huddle_chat.bootstrap --base-dir "%BASE_DIR%" --requirements requirements.txt
+%PY_CMD% -m huddle_chat.bootstrap --base-dir "%BASE_DIR%" --requirements requirements.txt %*
 GOTO END
 
 :ERROR_NO_PYTHON

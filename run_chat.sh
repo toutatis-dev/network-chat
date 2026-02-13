@@ -24,4 +24,4 @@ if ! resolve_python; then
 fi
 
 cd "$BASE_DIR"
-"$PY_CMD" -m huddle_chat.bootstrap --base-dir "$BASE_DIR" --requirements requirements.txt
+"$PY_CMD" -m huddle_chat.bootstrap --base-dir "$BASE_DIR" --requirements requirements.txt "$@"
