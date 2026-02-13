@@ -1,0 +1,310 @@
+import shlex
+import time
+from threading import Thread
+from typing import TYPE_CHECKING, Any
+
+from huddle_chat.constants import AI_DM_ROOM, AI_RETRY_BACKOFF_SECONDS
+
+if TYPE_CHECKING:
+    from chat import ChatApp
+
+
+class AIService:
+    def __init__(self, app: "ChatApp"):
+        self.app = app
+
+    def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
+        try:
+            tokens = shlex.split(arg_text)
+        except ValueError:
+            return {}, "Invalid /ai arguments. Check quotes and try again."
+
+        provider_override: str | None = None
+        model_override: str | None = None
+        is_private = False
+        disable_memory = False
+        prompt_parts: list[str] = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token == "--provider":
+                if i + 1 >= len(tokens):
+                    return {}, "Usage: /ai --provider <gemini|openai> <prompt>"
+                provider_override = tokens[i + 1].strip().lower()
+                i += 2
+                continue
+            if token == "--model":
+                if i + 1 >= len(tokens):
+                    return {}, "Usage: /ai --model <model-name> <prompt>"
+                model_override = tokens[i + 1].strip()
+                i += 2
+                continue
+            if token == "--private":
+                is_private = True
+                i += 1
+                continue
+            if token == "--no-memory":
+                disable_memory = True
+                i += 1
+                continue
+            prompt_parts.append(token)
+            i += 1
+
+        prompt = " ".join(prompt_parts).strip()
+        if not prompt:
+            return (
+                {},
+                "Usage: /ai [--provider <name>] [--model <name>] [--private] [--no-memory] <prompt>",
+            )
+
+        return {
+            "provider_override": provider_override,
+            "model_override": model_override,
+            "is_private": is_private,
+            "disable_memory": disable_memory,
+            "prompt": prompt,
+        }, None
+
+    def resolve_ai_provider_config(
+        self, provider_override: str | None, model_override: str | None
+    ) -> tuple[dict[str, str], str | None]:
+        providers = self.app.ai_config.get("providers", {})
+        default_provider = str(
+            self.app.ai_config.get("default_provider", "gemini")
+        ).lower()
+        provider = provider_override or default_provider
+        if provider not in ("gemini", "openai"):
+            return {}, f"Unknown provider '{provider}'. Use /aiproviders."
+        provider_data = providers.get(provider, {})
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        api_key = str(provider_data.get("api_key", "")).strip()
+        model = str(model_override or provider_data.get("model", "")).strip()
+        if not api_key:
+            return (
+                {},
+                f"Provider '{provider}' is missing API key. Run /aiconfig set-key {provider} <API_KEY>.",
+            )
+        if not model:
+            return (
+                {},
+                f"Provider '{provider}' is missing model. Run /aiconfig set-model {provider} <model>.",
+            )
+        return {"provider": provider, "api_key": api_key, "model": model}, None
+
+    def is_transient_ai_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        if "http 429" in text:
+            return True
+        if "http 5" in text:
+            return True
+        if "timed out" in text or "timeout" in text:
+            return True
+        if "temporarily unavailable" in text:
+            return True
+        return False
+
+    def run_ai_request_with_retry(
+        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+    ) -> tuple[str | None, str | None]:
+        self.app.ensure_ai_state_initialized()
+        try:
+            answer = self.app.call_ai_provider(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+            )
+            return answer, None
+        except Exception as exc:
+            if self.app.is_ai_request_cancelled(request_id):
+                return None, "AI request cancelled."
+            if not self.is_transient_ai_error(exc):
+                return None, f"AI request failed: {exc}"
+
+            with self.app.ai_state_lock:
+                if self.app.ai_active_request_id == request_id:
+                    self.app.ai_retry_count = 1
+            self.app.set_ai_preview_text(
+                request_id, "retrying after transient error..."
+            )
+            time.sleep(AI_RETRY_BACKOFF_SECONDS)
+            if self.app.is_ai_request_cancelled(request_id):
+                return None, "AI request cancelled."
+            try:
+                answer = self.app.call_ai_provider(
+                    provider=provider,
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                )
+                return answer, None
+            except Exception as retry_exc:
+                return None, f"AI request failed after retry: {retry_exc}"
+
+    def handle_ai_command(self, args: str) -> None:
+        lowered = args.strip().lower()
+        if lowered == "status":
+            self.app.append_system_message(self.app.build_ai_status_text())
+            return
+        if lowered == "cancel":
+            if self.app.request_ai_cancel():
+                self.app.append_system_message("AI cancellation requested.")
+            else:
+                self.app.append_system_message("No active AI request.")
+            return
+
+        parsed, parse_error = self.parse_ai_args(args)
+        if parse_error:
+            self.app.append_system_message(parse_error)
+            return
+
+        provider_cfg, config_error = self.resolve_ai_provider_config(
+            parsed.get("provider_override"),
+            parsed.get("model_override"),
+        )
+        if config_error:
+            self.app.append_system_message(config_error)
+            return
+
+        assert provider_cfg
+        provider = provider_cfg["provider"]
+        model = provider_cfg["model"]
+        prompt = parsed["prompt"]
+        disable_memory = bool(parsed.get("disable_memory"))
+        is_private = bool(parsed.get("is_private")) or self.app.is_local_room()
+        target_room = AI_DM_ROOM if is_private else self.app.current_room
+        scope = "private" if is_private else "room"
+        selected_memory: list[dict[str, Any]] = []
+        memory_warning: str | None = None
+        effective_prompt = prompt
+        if not disable_memory:
+            selected_memory, memory_warning = self.app.select_memory_for_prompt(
+                prompt=prompt,
+                provider_cfg=provider_cfg,
+            )
+            memory_context = self.app.build_memory_context_block(selected_memory)
+            if memory_context:
+                effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
+        if memory_warning:
+            self.app.append_system_message(memory_warning)
+
+        memory_ids_used = [
+            str(entry.get("id", "")).strip()
+            for entry in selected_memory
+            if str(entry.get("id", "")).strip()
+        ]
+        memory_topics_used = [
+            str(entry.get("topic", "general")).strip() or "general"
+            for entry in selected_memory
+        ]
+
+        request_id = self.app.start_ai_request_state(
+            provider=provider, model=model, target_room=target_room, scope=scope
+        )
+        if request_id is None:
+            self.app.append_system_message("AI busy. Use /ai status or /ai cancel.")
+            return
+
+        prompt_event = self.app.build_event("ai_prompt", prompt)
+        prompt_event["provider"] = provider
+        prompt_event["model"] = model
+        prompt_event["request_id"] = request_id
+        if memory_ids_used:
+            prompt_event["memory_ids_used"] = memory_ids_used
+        if not self.app.write_to_file(prompt_event, room=target_room):
+            self.app.clear_ai_request_state(request_id)
+            self.app.append_system_message("Error: Failed to persist AI prompt.")
+            return
+
+        self.app.append_system_message(
+            f"AI request sent ({scope}) via {provider}:{model} [{request_id}]."
+        )
+        self.app.refresh_output_from_events()
+
+        Thread(
+            target=self.process_ai_response,
+            args=(
+                request_id,
+                provider,
+                provider_cfg["api_key"],
+                model,
+                effective_prompt,
+                target_room,
+                is_private,
+                memory_ids_used,
+                memory_topics_used,
+            ),
+            daemon=True,
+        ).start()
+        Thread(
+            target=self.app.run_ai_preview_pulse, args=(request_id,), daemon=True
+        ).start()
+
+    def process_ai_response(
+        self,
+        request_id: str,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        target_room: str,
+        is_private: bool,
+        memory_ids_used: list[str],
+        memory_topics_used: list[str],
+    ) -> None:
+        answer, error_text = self.run_ai_request_with_retry(
+            request_id=request_id,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+        )
+        if error_text:
+            error_event = self.app.build_event("system", error_text)
+            error_event["request_id"] = request_id
+            self.app.write_to_file(error_event, room=target_room)
+            should_notify_private_failure = is_private and not self.app.is_local_room()
+            if should_notify_private_failure:
+                should_notify_private_failure = "cancelled" not in error_text.lower()
+            if should_notify_private_failure:
+                self.app.append_system_message(
+                    f"AI request failed in #ai-dm: {error_text}"
+                )
+            self.app.clear_ai_request_state(request_id)
+            self.app.refresh_output_from_events()
+            return
+        assert answer is not None
+
+        if self.app.is_ai_request_cancelled(request_id):
+            canceled_event = self.app.build_event("system", "AI request cancelled.")
+            canceled_event["request_id"] = request_id
+            self.app.write_to_file(canceled_event, room=target_room)
+            self.app.clear_ai_request_state(request_id)
+            self.app.refresh_output_from_events()
+            return
+
+        response_event = self.app.build_event("ai_response", answer)
+        response_event["provider"] = provider
+        response_event["model"] = model
+        response_event["request_id"] = request_id
+        if memory_ids_used:
+            response_event["memory_ids_used"] = memory_ids_used
+            response_event["memory_topics_used"] = memory_topics_used
+        if not self.app.write_to_file(response_event, room=target_room):
+            self.app.clear_ai_request_state(request_id)
+            self.app.append_system_message("Error: Failed to persist AI response.")
+            return
+
+        ids_line = self.app.format_memory_ids_line(memory_ids_used)
+        if ids_line:
+            memory_event = self.app.build_event("system", ids_line)
+            memory_event["request_id"] = request_id
+            self.app.write_to_file(memory_event, room=target_room)
+
+        if is_private and not self.app.is_local_room():
+            self.app.append_system_message(
+                "Private AI response saved to #ai-dm. Use /join ai-dm to review."
+            )
+        self.app.clear_ai_request_state(request_id)
+        self.app.refresh_output_from_events()
