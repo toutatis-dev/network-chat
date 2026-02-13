@@ -41,6 +41,7 @@ from huddle_chat.constants import (
     EVENT_SCHEMA_VERSION,
     LOCAL_CHAT_ROOT,
     LOCAL_ROOMS_ROOT,
+    LOCK_MAX_ATTEMPTS as DEFAULT_LOCK_MAX_ATTEMPTS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
     MEMORY_DIR_NAME,
@@ -87,6 +88,7 @@ else:
     _WATCHDOG_IMPORT_ERROR = None
 
 logger = logging.getLogger(__name__)
+LOCK_MAX_ATTEMPTS = DEFAULT_LOCK_MAX_ATTEMPTS
 
 
 class MessageFileWatchHandler(FileSystemEventHandler):

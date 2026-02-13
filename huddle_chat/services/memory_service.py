@@ -32,6 +32,14 @@ class MemoryService:
     def __init__(self, app: "ChatApp"):
         self.app = app
 
+    def _call_instance_override(
+        self, name: str, *args: Any, **kwargs: Any
+    ) -> tuple[bool, Any]:
+        override = self.app.__dict__.get(name)
+        if callable(override):
+            return True, override(*args, **kwargs)
+        return False, None
+
     def ensure_memory_state_initialized(self) -> None:
         if not hasattr(self.app, "memory_draft_active"):
             self.app.memory_draft_active = False
@@ -201,7 +209,10 @@ class MemoryService:
     def select_memory_for_prompt(
         self, prompt: str, provider_cfg: dict[str, str]
     ) -> tuple[list[dict[str, Any]], str | None]:
-        entries = self.load_memory_entries()
+        used_override, override_entries = self._call_instance_override(
+            "load_memory_entries"
+        )
+        entries = override_entries if used_override else self.load_memory_entries()
         if not entries:
             return [], None
 
@@ -278,7 +289,10 @@ class MemoryService:
         if not draft_summary:
             return []
 
-        entries = self.load_memory_entries()
+        used_override, override_entries = self._call_instance_override(
+            "load_memory_entries"
+        )
+        entries = override_entries if used_override else self.load_memory_entries()
         scored: list[tuple[float, dict[str, Any]]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -327,7 +341,8 @@ class MemoryService:
         self.app.ensure_memory_paths()
         memory_file = self.app.get_memory_file()
         row = json.dumps(entry, ensure_ascii=True)
-        for attempt in range(LOCK_MAX_ATTEMPTS):
+        max_attempts = int(getattr(chat, "LOCK_MAX_ATTEMPTS", LOCK_MAX_ATTEMPTS))
+        for attempt in range(max_attempts):
             try:
                 with chat.portalocker.Lock(
                     str(memory_file),
@@ -344,7 +359,7 @@ class MemoryService:
                 pass
             except OSError:
                 pass
-            if attempt == LOCK_MAX_ATTEMPTS - 1:
+            if attempt == max_attempts - 1:
                 break
             delay = min(
                 LOCK_BACKOFF_MAX_SECONDS,
@@ -501,7 +516,10 @@ class MemoryService:
             "tags": list(draft.get("tags", [])),
         }
         self.maybe_warn_memory_duplicates(entry)
-        if not self.write_memory_entry(entry):
+        used_override, write_ok = self._call_instance_override(
+            "write_memory_entry", entry
+        )
+        if not (bool(write_ok) if used_override else self.write_memory_entry(entry)):
             self.app.append_system_message("Failed to write shared memory entry.")
             return
         self.app.append_system_message(f"Memory saved: {entry['id']}")
@@ -618,7 +636,10 @@ class MemoryService:
                 except ValueError:
                     self.app.append_system_message("Usage: /memory list [limit]")
                     return
-            entries = self.load_memory_entries()
+            used_override, override_entries = self._call_instance_override(
+                "load_memory_entries"
+            )
+            entries = override_entries if used_override else self.load_memory_entries()
             if not entries:
                 self.app.append_system_message("No shared memory entries found.")
                 return
@@ -636,7 +657,10 @@ class MemoryService:
                 self.app.append_system_message("Usage: /memory search <query>")
                 return
             query = " ".join(tokens[1:]).strip().lower()
-            entries = self.load_memory_entries()
+            used_override, override_entries = self._call_instance_override(
+                "load_memory_entries"
+            )
+            entries = override_entries if used_override else self.load_memory_entries()
             matches = []
             for entry in entries:
                 haystack = " ".join(

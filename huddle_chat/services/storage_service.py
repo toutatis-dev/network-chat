@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import random
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -128,7 +127,8 @@ class StorageService:
         assert chat.portalocker is not None
 
         message_file = self.app.get_message_file(room)
-        for attempt in range(LOCK_MAX_ATTEMPTS):
+        max_attempts = int(getattr(chat, "LOCK_MAX_ATTEMPTS", LOCK_MAX_ATTEMPTS))
+        for attempt in range(max_attempts):
             try:
                 with chat.portalocker.Lock(
                     str(message_file),
@@ -154,12 +154,12 @@ class StorageService:
                 logger.warning("Unexpected write_to_file failure: %s", exc)
                 return False
 
-            if attempt == LOCK_MAX_ATTEMPTS - 1:
+            if attempt == max_attempts - 1:
                 break
             delay = min(
                 LOCK_BACKOFF_MAX_SECONDS,
                 LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
             )
-            time.sleep(delay + random.uniform(0, 0.03))
+            chat.time.sleep(delay + random.uniform(0, 0.03))
 
         return False
