@@ -163,3 +163,69 @@ def test_ai_busy_rejects_new_request(tmp_path):
     app.ai_cancel_event = Event()
     app.handle_ai_command("hello while busy")
     assert "AI busy. Use /ai status or /ai cancel." in app.output_field.text
+
+
+def test_memory_add_creates_confirm_draft_from_last_ai_response(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.message_events = [
+        {
+            "ts": "2026-01-01T10:00:00",
+            "type": "ai_response",
+            "author": "Tester",
+            "text": "Use runbook A for deploys and rollback with command B.",
+            "request_id": "req123",
+        }
+    ]
+    app.call_ai_provider = lambda **kwargs: (
+        '{"summary":"Use runbook A for deploys.","topic":"deploy","confidence":"high","tags":["runbook"]}'
+    )
+    app.handle_memory_command("add")
+    assert app.memory_draft_active is True
+    assert app.memory_draft_mode == "confirm"
+    assert app.memory_draft["topic"] == "deploy"
+    assert "Confirm memory entry? (y/n)" in app.output_field.text
+
+
+def test_memory_confirm_writes_entry_and_clears_draft(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.memory_draft_active = True
+    app.memory_draft_mode = "confirm"
+    app.memory_draft = {
+        "summary": "Use runbook A.",
+        "topic": "deploy",
+        "confidence": "high",
+        "source": "room:general request:req123 ts:2026-01-01T10:00:00",
+        "room": "general",
+        "origin_event_ref": "req123",
+        "tags": [],
+    }
+    written = {"count": 0}
+
+    def fake_write_memory_entry(entry):
+        written["count"] += 1
+        return True
+
+    app.write_memory_entry = fake_write_memory_entry
+    app.handle_memory_command("confirm")
+    assert written["count"] == 1
+    assert app.memory_draft_active is False
+    assert "Memory saved:" in app.output_field.text
+
+
+def test_memory_reject_enters_edit_mode_and_edit_updates_field(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.memory_draft_active = True
+    app.memory_draft_mode = "confirm"
+    app.memory_draft = {
+        "summary": "old",
+        "topic": "general",
+        "confidence": "med",
+        "source": "room:general ts:1",
+        "room": "general",
+        "origin_event_ref": "1",
+        "tags": [],
+    }
+    app.handle_input("n")
+    assert app.memory_draft_mode == "edit"
+    app.handle_memory_command("edit summary updated summary")
+    assert app.memory_draft["summary"] == "updated summary"

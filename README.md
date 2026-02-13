@@ -53,6 +53,13 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/aiconfig set-provider <provider>` - Set default provider locally.
     *   `/ai status` - Show active local AI request status.
     *   `/ai cancel` - Request cancellation of active local AI request.
+    *   `/memory add` - Draft a shared memory entry from the latest AI response.
+    *   `/memory confirm` - Confirm and write active memory draft.
+    *   `/memory cancel` - Cancel active memory draft.
+    *   `/memory edit <field> <value>` - Edit draft fields (`summary`, `topic`, `confidence`, `source`).
+    *   `/memory show-draft` - Show the active draft preview.
+    *   `/memory list [limit]` - List recent shared memory entries.
+    *   `/memory search <query>` - Search shared memory entries.
     *   `/share <target-room> <id|start-end>` - Share message(s) from local `ai-dm` into a shared room (IDs are shown as `(n)` in `ai-dm`).
     *   `/setpath [path]` - Change the shared server path.
     *   `/clear` - Clear your local chat history.
@@ -65,6 +72,7 @@ This version uses a room-based JSONL storage layout:
 
 *   `rooms/<room>/messages.jsonl` for chat events.
 *   `rooms/<room>/presence/<user-id>.json` for online presence.
+*   `memory/global.jsonl` for shared memory entries.
 *   `.local_chat/rooms/ai-dm/messages.jsonl` for private local AI history.
 *   `.local_chat/ai_config.json` for local AI provider credentials and defaults.
 

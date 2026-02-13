@@ -49,6 +49,8 @@ LOCAL_CHAT_ROOT = ".local_chat"
 AI_CONFIG_FILE = os.path.join(LOCAL_CHAT_ROOT, "ai_config.json")
 LOCAL_ROOMS_ROOT = os.path.join(LOCAL_CHAT_ROOT, "rooms")
 AI_DM_ROOM = "ai-dm"
+MEMORY_DIR_NAME = "memory"
+MEMORY_GLOBAL_FILE = "global.jsonl"
 DEFAULT_PATH = None
 DEFAULT_ROOM = "general"
 MAX_MESSAGES = 200
@@ -278,10 +280,44 @@ class SlashCompleter(Completer):
             return []
         return []
 
+    def _complete_memory_command(self, text: str):
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        subcommands = [
+            "add",
+            "confirm",
+            "cancel",
+            "edit",
+            "show-draft",
+            "list",
+            "search",
+            "help",
+        ]
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/memory"])
+        if len(tokens) == 1 and trailing_space:
+            return self._yield_candidates("", subcommands)
+
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, subcommands)
+        if len(values) == 2 and values[1] == "edit":
+            return self._yield_candidates(
+                current, ["summary", "topic", "confidence", "source"]
+            )
+        if len(values) == 3 and values[1] == "edit" and values[2] == "confidence":
+            return self._yield_candidates(current, ["low", "med", "high"])
+        return []
+
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if re.match(r"^/aiconfig(\s|$)", text):
             yield from self._complete_aiconfig_command(text)
+            return
+
+        if re.match(r"^/memory(\s|$)", text):
+            yield from self._complete_memory_command(text)
             return
 
         if re.match(r"^/ai(\s|$)", text):
@@ -322,6 +358,7 @@ class SlashCompleter(Completer):
                 ("/ai", "Ask AI in current room or private mode"),
                 ("/aiproviders", "List configured AI providers"),
                 ("/aiconfig", "Manage local AI config"),
+                ("/memory", "Draft and manage shared memory entries"),
                 ("/share", "Share AI DM messages into a room"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
@@ -403,6 +440,9 @@ class ChatApp:
         self.ai_retry_count = 0
         self.ai_preview_text = ""
         self.ai_cancel_event = Event()
+        self.memory_draft_active = False
+        self.memory_draft_mode = "none"
+        self.memory_draft: dict[str, Any] | None = None
 
         # Load Config
         config_data = self.load_config_data()
@@ -424,6 +464,7 @@ class ChatApp:
         self.ai_config = self.load_ai_config_data()
         self.ensure_paths()
         self.ensure_local_paths()
+        self.ensure_memory_paths()
         self.update_room_paths()
 
         legacy_path = os.path.join(self.base_dir, "Shared_chat.txt")
@@ -615,6 +656,20 @@ class ChatApp:
             self.get_local_message_file(AI_DM_ROOM).touch(exist_ok=True)
         except OSError as exc:
             logger.warning("Failed ensuring local AI paths: %s", exc)
+
+    def get_memory_dir(self) -> Path:
+        return (Path(self.base_dir) / MEMORY_DIR_NAME).resolve()
+
+    def get_memory_file(self) -> Path:
+        return self.get_memory_dir() / MEMORY_GLOBAL_FILE
+
+    def ensure_memory_paths(self) -> None:
+        try:
+            memory_dir = self.get_memory_dir()
+            os.makedirs(memory_dir, exist_ok=True)
+            self.get_memory_file().touch(exist_ok=True)
+        except OSError as exc:
+            logger.warning("Failed ensuring memory paths: %s", exc)
 
     def get_default_ai_config(self) -> dict[str, Any]:
         return {
@@ -1506,6 +1561,367 @@ class ChatApp:
             f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
         )
 
+    def ensure_memory_state_initialized(self) -> None:
+        if not hasattr(self, "memory_draft_active"):
+            self.memory_draft_active = False
+            self.memory_draft_mode = "none"
+            self.memory_draft = None
+
+    def clear_memory_draft(self) -> None:
+        self.ensure_memory_state_initialized()
+        self.memory_draft_active = False
+        self.memory_draft_mode = "none"
+        self.memory_draft = None
+
+    def load_memory_entries(self) -> list[dict[str, Any]]:
+        self.ensure_memory_paths()
+        entries: list[dict[str, Any]] = []
+        try:
+            with open(self.get_memory_file(), "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data, dict):
+                        entries.append(data)
+        except OSError as exc:
+            logger.warning("Failed reading memory entries: %s", exc)
+        return entries
+
+    def write_memory_entry(self, entry: dict[str, Any]) -> bool:
+        self.ensure_locking_dependency()
+        assert portalocker is not None
+        self.ensure_memory_paths()
+        memory_file = self.get_memory_file()
+        row = json.dumps(entry, ensure_ascii=True)
+        for attempt in range(LOCK_MAX_ATTEMPTS):
+            try:
+                with portalocker.Lock(
+                    str(memory_file),
+                    mode="a",
+                    timeout=LOCK_TIMEOUT_SECONDS,
+                    fail_when_locked=True,
+                    encoding="utf-8",
+                ) as f:
+                    f.write(row + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                return True
+            except portalocker.exceptions.LockException:
+                pass
+            except OSError:
+                pass
+            if attempt == LOCK_MAX_ATTEMPTS - 1:
+                break
+            delay = min(
+                LOCK_BACKOFF_MAX_SECONDS,
+                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
+            )
+            time.sleep(delay + random.uniform(0, 0.03))
+        return False
+
+    def get_last_ai_response_event(self) -> dict[str, Any] | None:
+        for event in reversed(self.message_events):
+            if str(event.get("type", "")) == "ai_response":
+                return event
+        return None
+
+    def extract_json_object(self, text: str) -> dict[str, Any] | None:
+        text = text.strip()
+        if not text:
+            return None
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            obj = json.loads(match.group(0))
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            return None
+        return None
+
+    def build_memory_source(self, event: dict[str, Any]) -> str:
+        request_id = str(event.get("request_id", "")).strip()
+        ts = str(event.get("ts", "")).strip()
+        if request_id:
+            return f"room:{self.current_room} request:{request_id} ts:{ts}"
+        return f"room:{self.current_room} ts:{ts}"
+
+    def draft_memory_from_last_ai_response(
+        self,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        source_event = self.get_last_ai_response_event()
+        if source_event is None:
+            return None, "No recent AI response found. Run /ai first."
+
+        provider_cfg, config_error = self.resolve_ai_provider_config(None, None)
+        if config_error:
+            return None, config_error
+        assert provider_cfg
+
+        source_text = str(source_event.get("text", "")).strip()
+        if not source_text:
+            return None, "Last AI response was empty."
+
+        prompt = (
+            "Summarize the following assistant response into reusable team memory. "
+            "Return strict JSON only with keys: summary, topic, confidence, tags. "
+            "confidence must be low, med, or high.\n\n"
+            f"Assistant response:\n{source_text}"
+        )
+        try:
+            drafted = self.call_ai_provider(
+                provider=provider_cfg["provider"],
+                api_key=provider_cfg["api_key"],
+                model=provider_cfg["model"],
+                prompt=prompt,
+            )
+        except Exception as exc:
+            return None, f"Memory draft generation failed: {exc}"
+
+        data = self.extract_json_object(drafted) or {}
+        summary = str(data.get("summary", "")).strip()
+        if not summary:
+            summary = source_text[:280]
+        topic = str(data.get("topic", "")).strip() or "general"
+        confidence = str(data.get("confidence", "")).strip().lower() or "med"
+        if confidence not in {"low", "med", "high"}:
+            confidence = "med"
+        tags = data.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+
+        draft = {
+            "summary": summary,
+            "topic": topic,
+            "confidence": confidence,
+            "source": self.build_memory_source(source_event),
+            "room": self.current_room,
+            "origin_event_ref": str(
+                source_event.get("request_id", source_event.get("ts", ""))
+            ),
+            "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
+        }
+        return draft, None
+
+    def show_memory_draft_preview(self) -> None:
+        self.ensure_memory_state_initialized()
+        if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
+            self.append_system_message("No active memory draft.")
+            return
+        draft = self.memory_draft
+        preview = (
+            "Memory Draft:\n"
+            f"Summary: {draft.get('summary', '')}\n"
+            f"Topic: {draft.get('topic', '')}\n"
+            f"Confidence: {draft.get('confidence', '')}\n"
+            f"Source: {draft.get('source', '')}"
+        )
+        self.append_system_message(preview)
+        if self.memory_draft_mode == "confirm":
+            self.append_system_message("Confirm memory entry? (y/n)")
+
+    def confirm_memory_draft(self) -> None:
+        self.ensure_memory_state_initialized()
+        if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
+            self.append_system_message("No active memory draft.")
+            return
+        draft = self.memory_draft
+        summary = str(draft.get("summary", "")).strip()
+        source = str(draft.get("source", "")).strip()
+        confidence = str(draft.get("confidence", "")).strip().lower()
+        if not summary:
+            self.append_system_message(
+                "Draft summary is empty. Use /memory edit summary <text>."
+            )
+            return
+        if not source:
+            self.append_system_message(
+                "Draft source is empty. Use /memory edit source <text>."
+            )
+            return
+        if confidence not in {"low", "med", "high"}:
+            self.append_system_message("Confidence must be low, med, or high.")
+            return
+
+        entry = {
+            "id": f"mem_{int(time.time())}_{uuid4().hex[:6]}",
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "author": self.name,
+            "summary": summary,
+            "topic": str(draft.get("topic", "general")).strip() or "general",
+            "confidence": confidence,
+            "source": source,
+            "room": str(draft.get("room", self.current_room)),
+            "origin_event_ref": str(draft.get("origin_event_ref", "")),
+            "tags": list(draft.get("tags", [])),
+        }
+        if not self.write_memory_entry(entry):
+            self.append_system_message("Failed to write shared memory entry.")
+            return
+        self.append_system_message(f"Memory saved: {entry['id']}")
+        self.clear_memory_draft()
+
+    def handle_memory_confirmation_input(self, text: str) -> bool:
+        self.ensure_memory_state_initialized()
+        if not self.memory_draft_active:
+            return False
+        if self.memory_draft_mode != "confirm":
+            return False
+        lowered = text.strip().lower()
+        if lowered == "y":
+            self.confirm_memory_draft()
+            return True
+        if lowered == "n":
+            self.memory_draft_mode = "edit"
+            self.append_system_message(
+                "Draft rejected. Edit fields: /memory edit summary|topic|confidence|source <value>. "
+                "Then use /memory confirm or /memory cancel."
+            )
+            return True
+        return False
+
+    def handle_memory_command(self, args: str) -> None:
+        self.ensure_memory_state_initialized()
+        trimmed = args.strip()
+        if not trimmed or trimmed.lower() == "help":
+            self.append_system_message(
+                "Memory commands: /memory add, /memory confirm, /memory cancel, "
+                "/memory show-draft, /memory edit <field> <value>, /memory list [N], /memory search <text>"
+            )
+            return
+
+        try:
+            tokens = shlex.split(trimmed)
+        except ValueError:
+            self.append_system_message("Invalid /memory syntax. Check quotes.")
+            return
+        if not tokens:
+            self.append_system_message("Usage: /memory help")
+            return
+
+        action = tokens[0].lower()
+        if action == "add":
+            if self.memory_draft_active:
+                self.append_system_message(
+                    "A memory draft is already active. Use /memory confirm or /memory cancel."
+                )
+                return
+            draft, error = self.draft_memory_from_last_ai_response()
+            if error:
+                self.append_system_message(error)
+                return
+            assert draft is not None
+            self.memory_draft = draft
+            self.memory_draft_active = True
+            self.memory_draft_mode = "confirm"
+            self.show_memory_draft_preview()
+            return
+
+        if action == "show-draft":
+            self.show_memory_draft_preview()
+            return
+
+        if action == "confirm":
+            self.confirm_memory_draft()
+            return
+
+        if action == "cancel":
+            if not self.memory_draft_active:
+                self.append_system_message("No active memory draft.")
+                return
+            self.clear_memory_draft()
+            self.append_system_message("Memory draft canceled.")
+            return
+
+        if action == "edit":
+            if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
+                self.append_system_message("No active memory draft.")
+                return
+            if len(tokens) < 3:
+                self.append_system_message(
+                    "Usage: /memory edit <summary|topic|confidence|source> <value>"
+                )
+                return
+            field = tokens[1].strip().lower()
+            value = " ".join(tokens[2:]).strip()
+            if field not in {"summary", "topic", "confidence", "source"}:
+                self.append_system_message(
+                    "Editable fields: summary, topic, confidence, source."
+                )
+                return
+            if field == "confidence":
+                value = value.lower()
+                if value not in {"low", "med", "high"}:
+                    self.append_system_message("Confidence must be low, med, or high.")
+                    return
+            self.memory_draft[field] = value
+            self.append_system_message(f"Updated draft {field}.")
+            self.show_memory_draft_preview()
+            return
+
+        if action == "list":
+            limit = 10
+            if len(tokens) > 1:
+                try:
+                    limit = max(1, min(100, int(tokens[1])))
+                except ValueError:
+                    self.append_system_message("Usage: /memory list [limit]")
+                    return
+            entries = self.load_memory_entries()
+            if not entries:
+                self.append_system_message("No shared memory entries found.")
+                return
+            lines = ["Shared Memory:"]
+            for entry in entries[-limit:]:
+                lines.append(
+                    f"{entry.get('id', '?')} [{entry.get('confidence', '?')}] "
+                    f"{entry.get('topic', 'general')}: {entry.get('summary', '')}"
+                )
+            self.append_system_message("\n".join(lines))
+            return
+
+        if action == "search":
+            if len(tokens) < 2:
+                self.append_system_message("Usage: /memory search <query>")
+                return
+            query = " ".join(tokens[1:]).strip().lower()
+            entries = self.load_memory_entries()
+            matches = []
+            for entry in entries:
+                haystack = " ".join(
+                    [
+                        str(entry.get("summary", "")),
+                        str(entry.get("topic", "")),
+                        str(entry.get("source", "")),
+                    ]
+                ).lower()
+                if query in haystack:
+                    matches.append(entry)
+            if not matches:
+                self.append_system_message(f"No memory matches for '{query}'.")
+                return
+            lines = [f"Memory matches ({len(matches)}):"]
+            for entry in matches[-10:]:
+                lines.append(
+                    f"{entry.get('id', '?')} [{entry.get('topic', 'general')}] {entry.get('summary', '')}"
+                )
+            self.append_system_message("\n".join(lines))
+            return
+
+        self.append_system_message("Unknown /memory command. Use /memory help.")
+
     def is_transient_ai_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
         if "http 429" in text:
@@ -1771,6 +2187,10 @@ class ChatApp:
         if not text:
             return
 
+        if self.handle_memory_confirmation_input(text):
+            self.input_field.text = ""
+            return
+
         if text.startswith("/"):
             parts = text.split(" ", 1)
             command = parts[0].lower()
@@ -1841,6 +2261,11 @@ class ChatApp:
 
             if command == "/share":
                 self.handle_share_command(args)
+                self.input_field.text = ""
+                return
+
+            if command == "/memory":
+                self.handle_memory_command(args)
                 self.input_field.text = ""
                 return
 
