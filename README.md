@@ -87,6 +87,12 @@ This version uses a room-based JSONL storage layout:
 
 This project uses a comprehensive suite of quality checks to maintain code resilience and professionalism.
 
+### Project Layout
+*   `chat.py` - application entrypoint/orchestration.
+*   `huddle_chat/constants.py` - shared constants, themes, and defaults.
+*   `huddle_chat/ui.py` - prompt-toolkit completer/lexer UI components.
+*   `tests/` - unit and behavior tests.
+
 ### Quality Checks
 *   **Black**: Automatic code formatting.
 *   **Flake8**: Linting for syntax and style issues.

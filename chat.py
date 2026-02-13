@@ -28,9 +28,32 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.styles import Style
-from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.layout.menus import CompletionsMenu
+
+from huddle_chat.constants import (
+    AI_CONFIG_FILE,
+    AI_DM_ROOM,
+    AI_HTTP_TIMEOUT_SECONDS,
+    AI_RETRY_BACKOFF_SECONDS,
+    CLIENT_ID_LENGTH,
+    COLORS,
+    CONFIG_FILE,
+    DEFAULT_PATH,
+    DEFAULT_ROOM,
+    LOCAL_CHAT_ROOT,
+    LOCAL_ROOMS_ROOT,
+    LOCK_BACKOFF_BASE_SECONDS,
+    LOCK_BACKOFF_MAX_SECONDS,
+    LOCK_MAX_ATTEMPTS,
+    LOCK_TIMEOUT_SECONDS,
+    MAX_MESSAGES,
+    MAX_PRESENCE_ID_LENGTH,
+    MEMORY_DIR_NAME,
+    MEMORY_GLOBAL_FILE,
+    PRESENCE_REFRESH_INTERVAL_SECONDS,
+    THEMES,
+)
+from huddle_chat.ui import ChatLexer, SlashCompleter
 
 portalocker: Any
 _PORTALOCKER_IMPORT_ERROR: ImportError | None
@@ -43,372 +66,7 @@ else:
     portalocker = _portalocker
     _PORTALOCKER_IMPORT_ERROR = None
 
-# Global Configuration
-CONFIG_FILE = "chat_config.json"
-LOCAL_CHAT_ROOT = ".local_chat"
-AI_CONFIG_FILE = os.path.join(LOCAL_CHAT_ROOT, "ai_config.json")
-LOCAL_ROOMS_ROOT = os.path.join(LOCAL_CHAT_ROOT, "rooms")
-AI_DM_ROOM = "ai-dm"
-MEMORY_DIR_NAME = "memory"
-MEMORY_GLOBAL_FILE = "global.jsonl"
-DEFAULT_PATH = None
-DEFAULT_ROOM = "general"
-MAX_MESSAGES = 200
-LOCK_TIMEOUT_SECONDS = 2.0
-LOCK_MAX_ATTEMPTS = 20
-LOCK_BACKOFF_BASE_SECONDS = 0.05
-LOCK_BACKOFF_MAX_SECONDS = 0.5
-MAX_PRESENCE_ID_LENGTH = 64
-CLIENT_ID_LENGTH = 12
-PRESENCE_REFRESH_INTERVAL_SECONDS = 1.0
-AI_HTTP_TIMEOUT_SECONDS = 45
-AI_RETRY_BACKOFF_SECONDS = 1.2
 logger = logging.getLogger(__name__)
-
-# Themes Configuration
-THEMES = {
-    "default": {
-        "chat-area": "bg:#000000 #ffffff",
-        "input-area": "bg:#222222 #ffffff",
-        "sidebar": "bg:#111111 #88ff88",
-        "frame.label": "bg:#0000aa #ffffff bold",
-        "status": "bg:#004400 #ffffff",
-        "completion-menu": "bg:#333333 #ffffff",
-        "completion-menu.completion.current": "bg:#00aaaa #000000",
-        "search-match": "bg:#333300 #ffff66",
-        "mention": "fg:#ffaf00 bold",
-        "timestamp": "fg:#888888",
-    },
-    "nord": {
-        "chat-area": "bg:#2E3440 #D8DEE9",
-        "input-area": "bg:#3B4252 #ECEFF4",
-        "sidebar": "bg:#434C5E #8FBCBB",
-        "frame.label": "bg:#5E81AC #ECEFF4 bold",
-        "status": "bg:#A3BE8C #2E3440",
-        "completion-menu": "bg:#4C566A #ECEFF4",
-        "completion-menu.completion.current": "bg:#88C0D0 #2E3440",
-        "search-match": "bg:#5e81ac #eceff4",
-        "mention": "fg:#ebcb8b bold",
-        "timestamp": "fg:#81a1c1",
-    },
-    "matrix": {
-        "chat-area": "bg:#000000 #00FF00",
-        "input-area": "bg:#001100 #00DD00",
-        "sidebar": "bg:#001100 #00FF00",
-        "frame.label": "bg:#003300 #00FF00 bold",
-        "status": "bg:#004400 #ffffff",
-        "completion-menu": "bg:#002200 #00FF00",
-        "completion-menu.completion.current": "bg:#00FF00 #000000",
-        "search-match": "bg:#003300 #aaffaa",
-        "mention": "fg:#ffffff bold",
-        "timestamp": "fg:#66cc66",
-    },
-    "solarized-dark": {
-        "chat-area": "bg:#002b36 #839496",
-        "input-area": "bg:#073642 #93a1a1",
-        "sidebar": "bg:#073642 #2aa198",
-        "frame.label": "bg:#268bd2 #fdf6e3 bold",
-        "status": "bg:#859900 #fdf6e3",
-        "completion-menu": "bg:#073642 #93a1a1",
-        "completion-menu.completion.current": "bg:#2aa198 #002b36",
-        "search-match": "bg:#586e75 #fdf6e3",
-        "mention": "fg:#cb4b16 bold",
-        "timestamp": "fg:#93a1a1",
-    },
-    "monokai": {
-        "chat-area": "bg:#272822 #F8F8F2",
-        "input-area": "bg:#3E3D32 #F8F8F2",
-        "sidebar": "bg:#272822 #A6E22E",
-        "frame.label": "bg:#F92672 #F8F8F2 bold",
-        "status": "bg:#66D9EF #272822",
-        "completion-menu": "bg:#3E3D32 #F8F8F2",
-        "completion-menu.completion.current": "bg:#FD971F #272822",
-        "search-match": "bg:#49483e #f8f8f2",
-        "mention": "fg:#fd971f bold",
-        "timestamp": "fg:#a59f85",
-    },
-}
-
-COLORS = [
-    "green",
-    "cyan",
-    "magenta",
-    "yellow",
-    "blue",
-    "red",
-    "white",
-    "brightgreen",
-    "brightcyan",
-    "brightmagenta",
-    "brightyellow",
-    "brightblue",
-    "brightred",
-]
-
-
-class SlashCompleter(Completer):
-    def __init__(self, app_ref: "ChatApp"):
-        self.app_ref = app_ref
-        self.model_hints = {
-            "gemini": ["gemini-2.5-flash", "gemini-2.5-pro"],
-            "openai": ["gpt-4o-mini", "gpt-4o", "gpt-5-mini"],
-        }
-
-    def _yield_candidates(
-        self, prefix: str, options: list[str], metas: dict[str, str] | None = None
-    ):
-        metas = metas or {}
-        for value in options:
-            if value.startswith(prefix):
-                yield Completion(
-                    value,
-                    start_position=-len(prefix),
-                    display=value,
-                    display_meta=metas.get(value, ""),
-                )
-
-    def _provider_names(self) -> list[str]:
-        ai_config = getattr(self.app_ref, "ai_config", {})
-        providers = (
-            ai_config.get("providers", {}) if isinstance(ai_config, dict) else {}
-        )
-        if isinstance(providers, dict):
-            names = [str(name).strip().lower() for name in providers.keys() if name]
-            if names:
-                return sorted(set(names))
-        return ["gemini", "openai"]
-
-    def _provider_for_ai_tokens(self, tokens: list[str]) -> str | None:
-        if "--provider" in tokens:
-            idx = tokens.index("--provider")
-            if idx + 1 < len(tokens):
-                return tokens[idx + 1].strip().lower()
-        return None
-
-    def _complete_ai_command(self, text: str):
-        tokens = text.split()
-        trailing_space = text.endswith(" ")
-        if len(tokens) == 1 and not trailing_space:
-            return self._yield_candidates(text, ["/ai"])
-        if len(tokens) == 1 and trailing_space:
-            return self._yield_candidates(
-                "",
-                ["status", "cancel", "--provider", "--model", "--private"],
-                {
-                    "status": "Show active AI request",
-                    "cancel": "Cancel active AI request",
-                    "--provider": "Override provider for this call",
-                    "--model": "Override model for this call",
-                    "--private": "Run AI privately in ai-dm",
-                },
-            )
-
-        current = "" if trailing_space else tokens[-1]
-        values = tokens if trailing_space else tokens[:-1]
-        prev = values[-1] if values else ""
-
-        if prev == "--provider":
-            return self._yield_candidates(current, self._provider_names())
-        if prev == "--model":
-            provider = self._provider_for_ai_tokens(tokens)
-            hints = self.model_hints.get(provider or "", [])
-            if not hints:
-                hints = self.model_hints.get("gemini", []) + self.model_hints.get(
-                    "openai", []
-                )
-            return self._yield_candidates(current, hints)
-
-        if len(tokens) == 2 and not trailing_space:
-            return self._yield_candidates(
-                current,
-                ["status", "cancel", "--provider", "--model", "--private"],
-                {
-                    "status": "Show active AI request",
-                    "cancel": "Cancel active AI request",
-                    "--provider": "Override provider for this call",
-                    "--model": "Override model for this call",
-                    "--private": "Run AI privately in ai-dm",
-                },
-            )
-        return []
-
-    def _complete_aiconfig_command(self, text: str):
-        tokens = text.split()
-        trailing_space = text.endswith(" ")
-        providers = self._provider_names()
-        subcommands = ["set-key", "set-model", "set-provider"]
-
-        if len(tokens) == 1 and not trailing_space:
-            return self._yield_candidates(text, ["/aiconfig"])
-        if len(tokens) == 1 and trailing_space:
-            return self._yield_candidates(
-                "",
-                subcommands + providers,
-                {
-                    "set-key": "Set provider API key",
-                    "set-model": "Set default model for provider",
-                    "set-provider": "Set default active provider",
-                },
-            )
-
-        current = "" if trailing_space else tokens[-1]
-        values = tokens if trailing_space else tokens[:-1]
-        if len(values) == 1:
-            return self._yield_candidates(current, subcommands + providers)
-
-        first = values[1] if len(values) > 1 else ""
-        second = values[2] if len(values) > 2 else ""
-
-        if first in ("set-key", "set-model", "set-provider"):
-            if len(values) == 2:
-                return self._yield_candidates(current, providers)
-            if first == "set-model" and len(values) == 3:
-                provider = values[2].strip().lower()
-                return self._yield_candidates(
-                    current, self.model_hints.get(provider, [])
-                )
-            return []
-
-        if first in providers:
-            if len(values) == 2:
-                return self._yield_candidates(current, ["set-key", "set-model"])
-            if second == "set-model" and len(values) == 3:
-                provider = first
-                return self._yield_candidates(
-                    current, self.model_hints.get(provider, [])
-                )
-            return []
-        return []
-
-    def _complete_memory_command(self, text: str):
-        tokens = text.split()
-        trailing_space = text.endswith(" ")
-        subcommands = [
-            "add",
-            "confirm",
-            "cancel",
-            "edit",
-            "show-draft",
-            "list",
-            "search",
-            "help",
-        ]
-        if len(tokens) == 1 and not trailing_space:
-            return self._yield_candidates(text, ["/memory"])
-        if len(tokens) == 1 and trailing_space:
-            return self._yield_candidates("", subcommands)
-
-        current = "" if trailing_space else tokens[-1]
-        values = tokens if trailing_space else tokens[:-1]
-        if len(values) == 1:
-            return self._yield_candidates(current, subcommands)
-        if len(values) == 2 and values[1] == "edit":
-            return self._yield_candidates(
-                current, ["summary", "topic", "confidence", "source"]
-            )
-        if len(values) == 3 and values[1] == "edit" and values[2] == "confidence":
-            return self._yield_candidates(current, ["low", "med", "high"])
-        return []
-
-    def get_completions(self, document, complete_event):
-        text = document.text_before_cursor
-        if re.match(r"^/aiconfig(\s|$)", text):
-            yield from self._complete_aiconfig_command(text)
-            return
-
-        if re.match(r"^/memory(\s|$)", text):
-            yield from self._complete_memory_command(text)
-            return
-
-        if re.match(r"^/ai(\s|$)", text):
-            yield from self._complete_ai_command(text)
-            return
-
-        if text.startswith("/theme "):
-            prefix = text[7:].lower()
-            for theme_name in THEMES.keys():
-                if theme_name.startswith(prefix):
-                    yield Completion(
-                        theme_name, start_position=-len(prefix), display=theme_name
-                    )
-            return
-
-        if text.startswith("/join "):
-            prefix = text[6:].lower()
-            for room_name in self.app_ref.list_rooms():
-                if room_name.startswith(prefix):
-                    yield Completion(
-                        room_name, start_position=-len(prefix), display=room_name
-                    )
-            return
-
-        if text.startswith("/"):
-            commands = [
-                ("/status", "Set your status (e.g. /status Busy)"),
-                ("/theme", "Change color theme (e.g. /theme nord)"),
-                ("/me", "Perform an action (e.g. /me waves)"),
-                ("/setpath", "Change the chat server path"),
-                ("/join", "Join or create room (e.g. /join dev)"),
-                ("/rooms", "List available rooms"),
-                ("/room", "Show current room"),
-                ("/search", "Search messages in current room"),
-                ("/next", "Jump to next search match"),
-                ("/prev", "Jump to previous search match"),
-                ("/clearsearch", "Clear active search"),
-                ("/ai", "Ask AI in current room or private mode"),
-                ("/aiproviders", "List configured AI providers"),
-                ("/aiconfig", "Manage local AI config"),
-                ("/memory", "Draft and manage shared memory entries"),
-                ("/share", "Share AI DM messages into a room"),
-                ("/exit", "Quit the application"),
-                ("/clear", "Clear local chat history"),
-            ]
-            word = text.lower()
-            for cmd, desc in commands:
-                if cmd.startswith(word):
-                    yield Completion(
-                        cmd, start_position=-len(word), display=cmd, display_meta=desc
-                    )
-            return
-
-        mention_context = self.app_ref.get_mention_context(text)
-        if mention_context is not None:
-            prefix, start_position = mention_context
-            prefix_cf = prefix.casefold()
-            candidates = self.app_ref.get_mention_candidates()
-            ranked = sorted(
-                candidates,
-                key=lambda item: (
-                    not item["name"].casefold().startswith(prefix_cf),
-                    item["name"].casefold(),
-                ),
-            )
-            for item in ranked:
-                name_cf = item["name"].casefold()
-                if prefix and prefix_cf not in name_cf:
-                    continue
-                meta = f"[{item['status']}]" if item["status"] else "online"
-                yield Completion(
-                    f"{item['name']} ",
-                    start_position=start_position,
-                    display=item["name"],
-                    display_meta=meta,
-                )
-
-
-class ChatLexer(Lexer):
-    def __init__(self, app_ref: "ChatApp"):
-        self.app_ref = app_ref
-
-    def lex_document(self, document):
-        def get_line_tokens(line_num):
-            try:
-                line_text = document.lines[line_num]
-                return self.app_ref.lex_line(line_text)
-            except Exception:
-                return [("", document.lines[line_num])]
-
-        return get_line_tokens
 
 
 class ChatApp:
@@ -549,6 +207,7 @@ class ChatApp:
             full_screen=True,
             mouse_support=True,
         )
+        self.command_handlers = self.build_command_handlers()
 
     def ensure_locking_dependency(self) -> None:
         if portalocker is not None:
@@ -2182,6 +1841,126 @@ class ChatApp:
         self.clear_ai_request_state(request_id)
         self.refresh_output_from_events()
 
+    def build_command_handlers(self) -> dict[str, Any]:
+        return {
+            "/theme": self.command_theme,
+            "/setpath": self.command_setpath,
+            "/status": self.command_status,
+            "/join": self.command_join,
+            "/rooms": self.command_rooms,
+            "/room": self.command_room,
+            "/aiproviders": self.command_aiproviders,
+            "/aiconfig": self.command_aiconfig,
+            "/ai": self.command_ai,
+            "/share": self.command_share,
+            "/memory": self.command_memory,
+            "/search": self.command_search,
+            "/next": self.command_next,
+            "/prev": self.command_prev,
+            "/clearsearch": self.command_clearsearch,
+            "/exit": self.command_exit,
+            "/quit": self.command_exit,
+            "/clear": self.command_clear,
+            "/me": self.command_me,
+        }
+
+    def command_theme(self, args: str) -> None:
+        if not args:
+            avail = ", ".join(THEMES.keys())
+            self.append_system_message(f"Available themes: {avail}")
+            return
+        target = args.strip().lower()
+        if target in THEMES:
+            self.current_theme = target
+            self.save_config()
+            self.application.style = self.get_style()
+            self.application.invalidate()
+            return
+        self.append_system_message(f"Unknown theme '{target}'.")
+
+    def command_setpath(self, args: str) -> None:
+        self.base_dir = args.strip()
+        self.save_config()
+        self.application.exit(result="restart")
+
+    def command_status(self, args: str) -> None:
+        self.status = args[:20]
+        self.force_heartbeat()
+
+    def command_join(self, args: str) -> None:
+        if not args.strip():
+            self.append_system_message("Usage: /join <room>")
+            return
+        self.switch_room(args.strip())
+
+    def command_rooms(self, _args: str) -> None:
+        rooms = ", ".join(self.list_rooms())
+        self.append_system_message(f"Rooms: {rooms}")
+
+    def command_room(self, _args: str) -> None:
+        self.append_system_message(f"Current room: #{self.current_room}")
+
+    def command_aiproviders(self, _args: str) -> None:
+        self.append_system_message(self.get_ai_provider_summary())
+
+    def command_aiconfig(self, args: str) -> None:
+        self.handle_aiconfig_command(args)
+
+    def command_ai(self, args: str) -> None:
+        self.handle_ai_command(args)
+
+    def command_share(self, args: str) -> None:
+        self.handle_share_command(args)
+
+    def command_memory(self, args: str) -> None:
+        self.handle_memory_command(args)
+
+    def command_search(self, args: str) -> None:
+        query = args.strip()
+        self.search_query = query
+        self.rebuild_search_hits()
+        if not query:
+            self.append_system_message("Search cleared.")
+        elif self.search_hits:
+            self.append_system_message(
+                f"Found {len(self.search_hits)} matches for '{query}'."
+            )
+            self.jump_to_search_hit(0)
+        else:
+            self.append_system_message(f"No matches for '{query}'.")
+
+    def command_next(self, _args: str) -> None:
+        if not self.jump_to_search_hit(1):
+            self.append_system_message("No search matches.")
+
+    def command_prev(self, _args: str) -> None:
+        if not self.jump_to_search_hit(-1):
+            self.append_system_message("No search matches.")
+
+    def command_clearsearch(self, _args: str) -> None:
+        self.search_query = ""
+        self.search_hits = []
+        self.active_search_hit_idx = -1
+        self.append_system_message("Search cleared.")
+
+    def command_exit(self, _args: str) -> None:
+        self.application.exit()
+
+    def command_clear(self, _args: str) -> None:
+        self.messages = []
+        self.message_events = []
+        self.output_field.text = ""
+        self.search_query = ""
+        self.search_hits = []
+        self.active_search_hit_idx = -1
+
+    def command_me(self, args: str) -> None:
+        event = self.build_event("me", args)
+        if not self.write_to_file(event):
+            self.append_system_message(
+                "Error: Could not send message. Network busy or locked."
+            )
+
     def handle_input(self, text: str) -> None:
         text = text.strip()
         if not text:
@@ -2192,144 +1971,17 @@ class ChatApp:
             return
 
         if text.startswith("/"):
+            if not hasattr(self, "command_handlers"):
+                self.command_handlers = self.build_command_handlers()
             parts = text.split(" ", 1)
             command = parts[0].lower()
             args = parts[1] if len(parts) > 1 else ""
-
-            if command == "/theme":
-                if not args:
-                    avail = ", ".join(THEMES.keys())
-                    self.append_system_message(f"Available themes: {avail}")
-                else:
-                    target = args.strip().lower()
-                    if target in THEMES:
-                        self.current_theme = target
-                        self.save_config()
-                        self.application.style = self.get_style()
-                        self.application.invalidate()
-                    else:
-                        self.append_system_message(f"Unknown theme '{target}'.")
+            handler = self.command_handlers.get(command)
+            if handler is None:
+                self.append_system_message(f"Unknown command: {command}")
                 self.input_field.text = ""
                 return
-
-            if command == "/setpath":
-                new_path = args.strip()
-                self.base_dir = new_path
-                self.save_config()
-                self.application.exit(result="restart")
-                return
-
-            if command == "/status":
-                self.status = args[:20]
-                self.force_heartbeat()
-                self.input_field.text = ""
-                return
-
-            if command == "/join":
-                if not args.strip():
-                    self.append_system_message("Usage: /join <room>")
-                else:
-                    self.switch_room(args.strip())
-                self.input_field.text = ""
-                return
-
-            if command == "/rooms":
-                rooms = ", ".join(self.list_rooms())
-                self.append_system_message(f"Rooms: {rooms}")
-                self.input_field.text = ""
-                return
-
-            if command == "/room":
-                self.append_system_message(f"Current room: #{self.current_room}")
-                self.input_field.text = ""
-                return
-
-            if command == "/aiproviders":
-                self.append_system_message(self.get_ai_provider_summary())
-                self.input_field.text = ""
-                return
-
-            if command == "/aiconfig":
-                self.handle_aiconfig_command(args)
-                self.input_field.text = ""
-                return
-
-            if command == "/ai":
-                self.handle_ai_command(args)
-                self.input_field.text = ""
-                return
-
-            if command == "/share":
-                self.handle_share_command(args)
-                self.input_field.text = ""
-                return
-
-            if command == "/memory":
-                self.handle_memory_command(args)
-                self.input_field.text = ""
-                return
-
-            if command == "/search":
-                query = args.strip()
-                self.search_query = query
-                self.rebuild_search_hits()
-                if not query:
-                    self.append_system_message("Search cleared.")
-                elif self.search_hits:
-                    self.append_system_message(
-                        f"Found {len(self.search_hits)} matches for '{query}'."
-                    )
-                    self.jump_to_search_hit(0)
-                else:
-                    self.append_system_message(f"No matches for '{query}'.")
-                self.input_field.text = ""
-                return
-
-            if command == "/next":
-                if not self.jump_to_search_hit(1):
-                    self.append_system_message("No search matches.")
-                self.input_field.text = ""
-                return
-
-            if command == "/prev":
-                if not self.jump_to_search_hit(-1):
-                    self.append_system_message("No search matches.")
-                self.input_field.text = ""
-                return
-
-            if command == "/clearsearch":
-                self.search_query = ""
-                self.search_hits = []
-                self.active_search_hit_idx = -1
-                self.append_system_message("Search cleared.")
-                self.input_field.text = ""
-                return
-
-            if command in ["/exit", "/quit"]:
-                self.application.exit()
-                return
-
-            if command == "/clear":
-                self.messages = []
-                self.message_events = []
-                self.output_field.text = ""
-                self.input_field.text = ""
-                self.search_query = ""
-                self.search_hits = []
-                self.active_search_hit_idx = -1
-                return
-
-            if command == "/me":
-                event = self.build_event("me", args)
-                if self.write_to_file(event):
-                    self.input_field.text = ""
-                else:
-                    self.append_system_message(
-                        "Error: Could not send message. Network busy or locked."
-                    )
-                return
-
-            self.append_system_message(f"Unknown command: {command}")
+            handler(args)
             self.input_field.text = ""
             return
 

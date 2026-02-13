@@ -1,7 +1,8 @@
 @echo off
-set TARGETS=chat.py tests\*.py
+set TARGETS=chat.py huddle_chat tests
+set PYTHON=venv\Scripts\python.exe
 echo --- 1. Formatting (Black) ---
-venv\Scripts\black %TARGETS%
+%PYTHON% -m black %TARGETS%
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Formatting failed.
     exit /b 1
@@ -9,7 +10,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 2. Linting (Flake8) ---
-venv\Scripts\flake8 %TARGETS% --ignore=E501,E203
+%PYTHON% -m flake8 %TARGETS% --ignore=E501,E203 --jobs=1
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Linting failed.
     exit /b 1
@@ -17,7 +18,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 3. Type Checking (Mypy) ---
-venv\Scripts\mypy chat.py
+%PYTHON% -m mypy chat.py huddle_chat
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Type checking failed.
     exit /b 1
@@ -25,7 +26,11 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 4. Testing (Pytest) ---
-venv\Scripts\pytest
+set PYTEST_TMP=%CD%\.tmp\pytest
+if not exist "%CD%\.tmp" mkdir "%CD%\.tmp"
+set TMP=%PYTEST_TMP%
+set TEMP=%PYTEST_TMP%
+%PYTHON% -m pytest tests --basetemp "%PYTEST_TMP%"
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Tests failed.
     exit /b 1

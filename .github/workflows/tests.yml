@@ -27,10 +27,11 @@ jobs:
       # We'll run the commands directly so we don't depend on the venv path in check.sh
       run: |
         echo "--- Formatting ---"
-        black . --check
+        black chat.py huddle_chat tests --check
         echo "--- Linting ---"
-        flake8 chat.py --ignore=E501,E203
+        flake8 chat.py huddle_chat tests --ignore=E501,E203 --jobs=1
         echo "--- Type Checking ---"
-        mypy chat.py
+        mypy chat.py huddle_chat
         echo "--- Testing ---"
-        pytest
+        mkdir -p .tmp/pytest
+        TMPDIR="$(pwd)/.tmp/pytest" pytest tests --basetemp .tmp/pytest

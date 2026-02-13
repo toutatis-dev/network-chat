@@ -18,8 +18,8 @@ IF NOT EXIST "%VENV_DIR%" GOTO CREATE_VENV
 "%PYTHON_EXE%" --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 GOTO RECREATE_VENV
 
-:: 4. Check if dependencies are installed (quick check)
-"%PYTHON_EXE%" -c "import prompt_toolkit" >nul 2>&1
+:: 4. Check if dependencies are installed and package imports resolve
+"%PYTHON_EXE%" -c "import prompt_toolkit, portalocker, huddle_chat.ui" >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 GOTO INSTALL_DEPS
 
 :: If all good, run

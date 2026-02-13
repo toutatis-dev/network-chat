@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 chat_config.json
 .local_chat/
+.pytest_cache/
+pytest-cache-files-*
