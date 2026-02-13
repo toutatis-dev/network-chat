@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 import chat
@@ -133,3 +134,27 @@ def test_sidebar_color_sanitization_falls_back_to_white(app_instance):
 
     fragments = app_instance.sidebar_control.text
     assert fragments[0][0] == "fg:white"
+
+
+def test_monitor_messages_resets_offset_after_truncation(
+    app_instance, tmp_path, monkeypatch
+):
+    chat_file = tmp_path / "Shared_chat.txt"
+    chat_file.write_text("hello\n", encoding="utf-8")
+
+    app_instance.chat_file = str(chat_file)
+    app_instance.last_pos = 999
+    app_instance.messages = []
+    app_instance.running = True
+    app_instance.output_field = MagicMock()
+    app_instance.application = MagicMock()
+
+    async def stop_after_first_sleep(seconds):
+        app_instance.running = False
+
+    monkeypatch.setattr(chat.asyncio, "sleep", stop_after_first_sleep)
+
+    asyncio.run(app_instance.monitor_messages())
+
+    assert app_instance.messages == ["hello"]
+    assert app_instance.last_pos == chat_file.stat().st_size

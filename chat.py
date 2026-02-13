@@ -5,6 +5,7 @@ import asyncio
 import string
 import random
 import re
+import logging
 from typing import Any
 from datetime import datetime
 from threading import Thread
@@ -46,6 +47,7 @@ LOCK_MAX_ATTEMPTS = 20
 LOCK_BACKOFF_BASE_SECONDS = 0.05
 LOCK_BACKOFF_MAX_SECONDS = 0.5
 MAX_PRESENCE_ID_LENGTH = 64
+logger = logging.getLogger(__name__)
 
 # Themes Configuration
 THEMES = {
@@ -274,8 +276,8 @@ class ChatApp:
             try:
                 with open(CONFIG_FILE, "r") as f:
                     return json.load(f)
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning("Failed to load config from %s: %s", CONFIG_FILE, exc)
         return {}
 
     def save_config(self) -> None:
@@ -382,8 +384,8 @@ class ChatApp:
         if not os.path.exists(self.presence_dir):
             return online
         for filename in os.listdir(self.presence_dir):
+            path = os.path.join(self.presence_dir, filename)
             try:
-                path = os.path.join(self.presence_dir, filename)
                 if now - os.path.getmtime(path) < 30:
                     with open(path, "r") as f:
                         data = json.load(f)
@@ -397,10 +399,12 @@ class ChatApp:
                 else:
                     try:
                         os.remove(path)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to remove stale presence file %s: %s", path, exc
+                        )
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                logger.warning("Failed to process presence file %s: %s", path, exc)
         return online
 
     def heartbeat(self) -> None:
@@ -419,16 +423,20 @@ class ChatApp:
                 }
                 with open(presence_path, "w") as f:
                     json.dump(data, f)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.warning("Failed heartbeat write to %s: %s", presence_path, exc)
             self.online_users = self.get_online_users()
             self.update_sidebar()
             time.sleep(10)
         if os.path.exists(presence_path):
             try:
                 os.remove(presence_path)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove presence file on shutdown %s: %s",
+                    presence_path,
+                    exc,
+                )
 
     def update_sidebar(self) -> None:
         fragments: list[tuple[str, str]] = []
@@ -578,14 +586,22 @@ class ChatApp:
                 json.dump(data, f)
             self.online_users = self.get_online_users()
             self.update_sidebar()
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed forced heartbeat update: %s", exc)
 
     async def monitor_messages(self) -> None:
         while self.running:
             if os.path.exists(self.chat_file):
                 try:
                     with open(self.chat_file, "r") as f:
+                        current_size = os.path.getsize(self.chat_file)
+                        if current_size < self.last_pos:
+                            logger.warning(
+                                "Chat file shrank from offset %s to %s; resetting.",
+                                self.last_pos,
+                                current_size,
+                            )
+                            self.last_pos = 0
                         f.seek(self.last_pos)
                         new_lines = f.readlines()
                         if new_lines:
@@ -600,8 +616,10 @@ class ChatApp:
                                 self.output_field.text
                             )
                             self.application.invalidate()
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.warning(
+                        "Failed while monitoring chat file %s: %s", self.chat_file, exc
+                    )
             await asyncio.sleep(0.5)
 
     def run(self) -> None:
@@ -651,4 +669,5 @@ class ChatApp:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     ChatApp().run()

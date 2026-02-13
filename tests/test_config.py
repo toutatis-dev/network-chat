@@ -1,4 +1,5 @@
 import json
+import logging
 import pytest
 from unittest.mock import patch, mock_open
 import chat
@@ -59,3 +60,13 @@ def test_save_config(clean_env):
         assert written_data["path"] == "/tmp/chat"
         assert written_data["theme"] == "matrix"
         assert written_data["username"] == "Neo"
+
+
+def test_load_config_invalid_json_logs_warning(clean_env, caplog):
+    with patch("os.path.exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data="{not-json")):
+            app = chat.ChatApp.__new__(chat.ChatApp)
+            with caplog.at_level(logging.WARNING):
+                config = app.load_config_data()
+    assert config == {}
+    assert "Failed to load config from chat_config.json" in caplog.text
