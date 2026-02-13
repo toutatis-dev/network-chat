@@ -181,6 +181,31 @@ class SlashCompleter(Completer):
                     yield Completion(
                         cmd, start_position=-len(word), display=cmd, display_meta=desc
                     )
+            return
+
+        mention_context = self.app_ref.get_mention_context(text)
+        if mention_context is not None:
+            prefix, start_position = mention_context
+            prefix_cf = prefix.casefold()
+            candidates = self.app_ref.get_mention_candidates()
+            ranked = sorted(
+                candidates,
+                key=lambda item: (
+                    not item["name"].casefold().startswith(prefix_cf),
+                    item["name"].casefold(),
+                ),
+            )
+            for item in ranked:
+                name_cf = item["name"].casefold()
+                if prefix and prefix_cf not in name_cf:
+                    continue
+                meta = f"[{item['status']}]" if item["status"] else "online"
+                yield Completion(
+                    f"{item['name']} ",
+                    start_position=start_position,
+                    display=item["name"],
+                    display_meta=meta,
+                )
 
 
 class ChatLexer(Lexer):
@@ -272,6 +297,19 @@ class ChatApp:
         @self.kb.add("enter")
         def _(event):
             self.handle_input(self.input_field.text)
+
+        @self.kb.add("tab")
+        def _(event):
+            buffer = event.current_buffer
+            complete_state = buffer.complete_state
+            if complete_state is not None:
+                completion = complete_state.current_completion
+                if completion is None and complete_state.completions:
+                    completion = complete_state.completions[0]
+                if completion is not None:
+                    buffer.apply_completion(completion)
+                    return
+            buffer.start_completion(select_first=True)
 
         @self.kb.add("c-c")
         def _(event):
@@ -607,6 +645,43 @@ class ChatApp:
         if color in COLORS:
             return color
         return "white"
+
+    def get_mention_context(self, text_before_cursor: str) -> tuple[str, int] | None:
+        at_index = text_before_cursor.rfind("@")
+        if at_index == -1:
+            return None
+
+        if at_index > 0:
+            prev = text_before_cursor[at_index - 1]
+            if prev.isalnum() or prev == "_":
+                return None
+
+        prefix = text_before_cursor[at_index + 1 :]
+        if not prefix:
+            return ("", 0)
+
+        if "\n" in prefix or "\r" in prefix:
+            return None
+
+        return (prefix, -len(prefix))
+
+    def get_mention_candidates(self) -> list[dict[str, str]]:
+        candidates: list[dict[str, str]] = []
+        seen_names: set[str] = set()
+        self_name = self.name.casefold()
+        for user_data in self.online_users.values():
+            raw_name = self.sanitize_sidebar_text(user_data.get("name", ""), 64).strip()
+            if not raw_name:
+                continue
+            if raw_name.casefold() == self_name:
+                continue
+            dedupe_key = raw_name.casefold()
+            if dedupe_key in seen_names:
+                continue
+            seen_names.add(dedupe_key)
+            status = self.sanitize_sidebar_text(user_data.get("status", ""), 80).strip()
+            candidates.append({"name": raw_name, "status": status})
+        return candidates
 
     def build_event(self, event_type: str, text: str) -> dict[str, Any]:
         return {

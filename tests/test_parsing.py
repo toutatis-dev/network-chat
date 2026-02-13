@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
 
 import chat
 
@@ -155,3 +157,78 @@ def test_lex_line_highlights_mentions_and_search(app_instance):
     styles = [style for style, _ in tokens]
     assert "class:search-match" in styles
     assert "class:mention" in styles
+
+
+def test_mention_completion_opens_on_at_and_hides_self(app_instance):
+    app_instance.online_users = {
+        "alice11111111": {
+            "name": "Alice",
+            "client_id": "alice11111111",
+            "color": "green",
+            "status": "online",
+        },
+        "self999999999": {
+            "name": "TestUser",
+            "client_id": "self999999999",
+            "color": "cyan",
+            "status": "",
+        },
+    }
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(Document("@", cursor_position=1), CompleteEvent())
+    )
+    inserted = [c.text for c in completions]
+    assert "Alice " in inserted
+    assert "TestUser " not in inserted
+
+
+def test_mention_completion_filters_case_insensitive(app_instance):
+    app_instance.online_users = {
+        "alice11111111": {"name": "Alice", "client_id": "alice11111111", "status": ""},
+        "bob1111111111": {"name": "Bob", "client_id": "bob1111111111", "status": ""},
+    }
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(Document("@AL", cursor_position=3), CompleteEvent())
+    )
+    assert [c.text for c in completions] == ["Alice "]
+
+
+def test_mention_completion_supports_spaced_names(app_instance):
+    app_instance.online_users = {
+        "jane11111111": {
+            "name": "Jane Doe",
+            "client_id": "jane11111111",
+            "status": "busy",
+        }
+    }
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(Document("@ja", cursor_position=3), CompleteEvent())
+    )
+    assert completions
+    assert completions[0].text == "Jane Doe "
+
+
+def test_mention_not_triggered_in_email_like_text(app_instance):
+    app_instance.online_users = {
+        "alice11111111": {"name": "Alice", "client_id": "alice11111111", "status": ""}
+    }
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("email@al", cursor_position=8), CompleteEvent()
+        )
+    )
+    assert completions == []
+
+
+def test_slash_completion_unchanged_with_theme_prefix(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/theme n", cursor_position=8), CompleteEvent()
+        )
+    )
+    assert any(c.text == "nord" for c in completions)
