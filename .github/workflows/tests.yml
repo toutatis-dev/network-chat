@@ -8,7 +8,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
     - uses: actions/checkout@v4
@@ -21,10 +25,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
 
-    - name: Run Quality Checks
-      # We'll run the commands directly so we don't depend on the venv path in check.sh
+    - name: Launcher Preflight
+      run: |
+        python -m huddle_chat.bootstrap --base-dir . --requirements requirements.txt --preflight
+
+    - name: Run Quality Checks (POSIX)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
         echo "--- Formatting ---"
         black chat.py huddle_chat tests --check
@@ -35,3 +44,20 @@ jobs:
         echo "--- Testing ---"
         mkdir -p .tmp/pytest
         TMPDIR="$(pwd)/.tmp/pytest" pytest tests --basetemp .tmp/pytest
+
+    - name: Run Quality Checks (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        echo "--- Formatting ---"
+        black chat.py huddle_chat tests --check
+        echo "--- Linting ---"
+        flake8 chat.py huddle_chat tests --ignore=E501,E203,W503 --jobs=1
+        echo "--- Type Checking ---"
+        mypy chat.py huddle_chat
+        echo "--- Testing ---"
+        $pytestTmp = Join-Path $pwd ".tmp\\pytest"
+        New-Item -ItemType Directory -Force -Path $pytestTmp | Out-Null
+        $env:TMP = $pytestTmp
+        $env:TEMP = $pytestTmp
+        pytest tests --basetemp $pytestTmp
