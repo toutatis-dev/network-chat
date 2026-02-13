@@ -147,9 +147,147 @@ COLORS = [
 class SlashCompleter(Completer):
     def __init__(self, app_ref: "ChatApp"):
         self.app_ref = app_ref
+        self.model_hints = {
+            "gemini": ["gemini-2.5-flash", "gemini-2.5-pro"],
+            "openai": ["gpt-4o-mini", "gpt-4o", "gpt-5-mini"],
+        }
+
+    def _yield_candidates(
+        self, prefix: str, options: list[str], metas: dict[str, str] | None = None
+    ):
+        metas = metas or {}
+        for value in options:
+            if value.startswith(prefix):
+                yield Completion(
+                    value,
+                    start_position=-len(prefix),
+                    display=value,
+                    display_meta=metas.get(value, ""),
+                )
+
+    def _provider_names(self) -> list[str]:
+        ai_config = getattr(self.app_ref, "ai_config", {})
+        providers = (
+            ai_config.get("providers", {}) if isinstance(ai_config, dict) else {}
+        )
+        if isinstance(providers, dict):
+            names = [str(name).strip().lower() for name in providers.keys() if name]
+            if names:
+                return sorted(set(names))
+        return ["gemini", "openai"]
+
+    def _provider_for_ai_tokens(self, tokens: list[str]) -> str | None:
+        if "--provider" in tokens:
+            idx = tokens.index("--provider")
+            if idx + 1 < len(tokens):
+                return tokens[idx + 1].strip().lower()
+        return None
+
+    def _complete_ai_command(self, text: str):
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/ai"])
+        if len(tokens) == 1 and trailing_space:
+            return self._yield_candidates(
+                "",
+                ["status", "cancel", "--provider", "--model", "--private"],
+                {
+                    "status": "Show active AI request",
+                    "cancel": "Cancel active AI request",
+                    "--provider": "Override provider for this call",
+                    "--model": "Override model for this call",
+                    "--private": "Run AI privately in ai-dm",
+                },
+            )
+
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        prev = values[-1] if values else ""
+
+        if prev == "--provider":
+            return self._yield_candidates(current, self._provider_names())
+        if prev == "--model":
+            provider = self._provider_for_ai_tokens(tokens)
+            hints = self.model_hints.get(provider or "", [])
+            if not hints:
+                hints = self.model_hints.get("gemini", []) + self.model_hints.get(
+                    "openai", []
+                )
+            return self._yield_candidates(current, hints)
+
+        if len(tokens) == 2 and not trailing_space:
+            return self._yield_candidates(
+                current,
+                ["status", "cancel", "--provider", "--model", "--private"],
+                {
+                    "status": "Show active AI request",
+                    "cancel": "Cancel active AI request",
+                    "--provider": "Override provider for this call",
+                    "--model": "Override model for this call",
+                    "--private": "Run AI privately in ai-dm",
+                },
+            )
+        return []
+
+    def _complete_aiconfig_command(self, text: str):
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        providers = self._provider_names()
+        subcommands = ["set-key", "set-model", "set-provider"]
+
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/aiconfig"])
+        if len(tokens) == 1 and trailing_space:
+            return self._yield_candidates(
+                "",
+                subcommands + providers,
+                {
+                    "set-key": "Set provider API key",
+                    "set-model": "Set default model for provider",
+                    "set-provider": "Set default active provider",
+                },
+            )
+
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, subcommands + providers)
+
+        first = values[1] if len(values) > 1 else ""
+        second = values[2] if len(values) > 2 else ""
+
+        if first in ("set-key", "set-model", "set-provider"):
+            if len(values) == 2:
+                return self._yield_candidates(current, providers)
+            if first == "set-model" and len(values) == 3:
+                provider = values[2].strip().lower()
+                return self._yield_candidates(
+                    current, self.model_hints.get(provider, [])
+                )
+            return []
+
+        if first in providers:
+            if len(values) == 2:
+                return self._yield_candidates(current, ["set-key", "set-model"])
+            if second == "set-model" and len(values) == 3:
+                provider = first
+                return self._yield_candidates(
+                    current, self.model_hints.get(provider, [])
+                )
+            return []
+        return []
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
+        if re.match(r"^/aiconfig(\s|$)", text):
+            yield from self._complete_aiconfig_command(text)
+            return
+
+        if re.match(r"^/ai(\s|$)", text):
+            yield from self._complete_ai_command(text)
+            return
+
         if text.startswith("/theme "):
             prefix = text[7:].lower()
             for theme_name in THEMES.keys():
@@ -1571,11 +1709,12 @@ class ChatApp:
             error_event = self.build_event("system", error_text)
             error_event["request_id"] = request_id
             self.write_to_file(error_event, room=target_room)
-            if (
+            should_notify_private_failure = (
                 is_private
                 and not self.is_local_room()
                 and "cancelled" not in error_text.lower()
-            ):
+            )
+            if should_notify_private_failure:
                 self.append_system_message(f"AI request failed in #ai-dm: {error_text}")
             self.clear_ai_request_state(request_id)
             self.refresh_output_from_events()

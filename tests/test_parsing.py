@@ -232,3 +232,40 @@ def test_slash_completion_unchanged_with_theme_prefix(app_instance):
         )
     )
     assert any(c.text == "nord" for c in completions)
+
+
+def test_ai_subcommand_completion_shows_status_and_cancel(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(Document("/ai ", cursor_position=4), CompleteEvent())
+    )
+    texts = [c.text for c in completions]
+    assert "status" in texts
+    assert "cancel" in texts
+
+
+def test_aiconfig_set_model_suggests_provider_models(app_instance):
+    app_instance.ai_config = {
+        "default_provider": "openai",
+        "providers": {"openai": {"api_key": "x", "model": "gpt-4o-mini"}},
+    }
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/aiconfig set-model openai g", cursor_position=27),
+            CompleteEvent(),
+        )
+    )
+    assert any(c.text.startswith("gpt-") for c in completions)
+
+
+def test_aiconfig_provider_first_completion_suggests_set_actions(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/aiconfig gemini ", cursor_position=17), CompleteEvent()
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "set-key" in texts
+    assert "set-model" in texts
