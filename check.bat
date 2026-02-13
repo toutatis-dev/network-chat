@@ -9,7 +9,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 2. Linting (Flake8) ---
-venv\Scripts\flake8 %TARGETS% --ignore=E501
+venv\Scripts\flake8 %TARGETS% --ignore=E501,E203
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Linting failed.
     exit /b 1

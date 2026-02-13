@@ -1,70 +1,53 @@
 import json
 import logging
-import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import mock_open, patch
+
 import chat
 
-# We mock ChatApp's dependency on TUI and file system to test logic in isolation
 
-
-@pytest.fixture
-def clean_env():
-    # Helper to clean up or set up environment variables/paths if needed
-    # For these tests, we mostly mock, but good to have a fixture place
-    pass
-
-
-def test_load_config_defaults(clean_env):
-    """Test that loading config returns empty dict if file is missing."""
+def test_load_config_defaults_when_missing():
     with patch("os.path.exists", return_value=False):
-        app = chat.ChatApp.__new__(
-            chat.ChatApp
-        )  # Create instance without calling __init__
-        config = app.load_config_data()
-        assert config == {}
+        app = chat.ChatApp.__new__(chat.ChatApp)
+        assert app.load_config_data() == {}
 
 
-def test_load_config_existing(clean_env):
-    """Test loading a valid config file."""
-    mock_data = json.dumps({"theme": "nord", "username": "Tester", "path": "/tmp"})
+def test_load_config_existing_with_room():
+    mock_data = json.dumps(
+        {"theme": "nord", "username": "Tester", "path": "/tmp", "room": "dev"}
+    )
     with patch("os.path.exists", return_value=True):
         with patch("builtins.open", mock_open(read_data=mock_data)):
             app = chat.ChatApp.__new__(chat.ChatApp)
             config = app.load_config_data()
-            assert config["theme"] == "nord"
-            assert config["username"] == "Tester"
+    assert config["theme"] == "nord"
+    assert config["username"] == "Tester"
+    assert config["room"] == "dev"
 
 
-def test_save_config(clean_env):
-    """Test that save_config writes the correct JSON."""
+def test_save_config_writes_room():
     app = chat.ChatApp.__new__(chat.ChatApp)
     app.base_dir = "/tmp/chat"
     app.current_theme = "matrix"
     app.name = "Neo"
+    app.current_room = "ops"
 
     with patch("builtins.open", mock_open()) as mocked_file:
         app.save_config()
 
-        # Verify file was opened for writing
-        mocked_file.assert_called_with("chat_config.json", "w")
-
-        # Verify JSON content written
-        # We combine all write calls to check the full JSON string
-        handle = mocked_file()
-        # Collect all write calls
-        written_chunks = [call.args[0] for call in handle.write.call_args_list]
-        full_json = "".join(written_chunks)
-
-        written_data = json.loads(full_json)
-
-        assert written_data["path"] == "/tmp/chat"
-        assert written_data["theme"] == "matrix"
-        assert written_data["username"] == "Neo"
+    mocked_file.assert_called_with("chat_config.json", "w", encoding="utf-8")
+    handle = mocked_file()
+    written_chunks = [call.args[0] for call in handle.write.call_args_list]
+    full_json = "".join(written_chunks)
+    payload = json.loads(full_json)
+    assert payload["path"] == "/tmp/chat"
+    assert payload["theme"] == "matrix"
+    assert payload["username"] == "Neo"
+    assert payload["room"] == "ops"
 
 
-def test_load_config_invalid_json_logs_warning(clean_env, caplog):
+def test_load_config_invalid_json_logs_warning(caplog):
     with patch("os.path.exists", return_value=True):
-        with patch("builtins.open", mock_open(read_data="{not-json")):
+        with patch("builtins.open", mock_open(read_data="{bad-json")):
             app = chat.ChatApp.__new__(chat.ChatApp)
             with caplog.at_level(logging.WARNING):
                 config = app.load_config_data()

@@ -38,9 +38,25 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/status [text]` - Set your status (e.g., "In a meeting").
     *   `/theme [name]` - Change the color theme (e.g., `/theme nord`).
     *   `/me [action]` - Perform an action (e.g., `/me waves`).
+    *   `/join [room]` - Join or create a room (e.g., `/join dev`).
+    *   `/rooms` - List available rooms.
+    *   `/room` - Show your current room.
+    *   `/search [text]` - Search message history in the current room.
+    *   `/next` - Jump to the next search match.
+    *   `/prev` - Jump to the previous search match.
+    *   `/clearsearch` - Clear the active search filter.
     *   `/setpath [path]` - Change the shared server path.
     *   `/clear` - Clear your local chat history.
     *   `/exit` - Quit the application.
+
+## Storage Format
+
+This version uses a room-based JSONL storage layout:
+
+*   `rooms/<room>/messages.jsonl` for chat events.
+*   `rooms/<room>/presence/<user-id>.json` for online presence.
+
+**Hard switch note:** legacy `Shared_chat.txt` is not read by this version.
 
 ## Requirements
 

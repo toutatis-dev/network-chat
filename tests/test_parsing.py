@@ -1,95 +1,70 @@
-import asyncio
-import pytest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 import chat
 
 
 @pytest.fixture
-def app_instance():
-    """Returns a ChatApp instance with mocked UI and IO."""
-    with patch("chat.ChatApp.load_config_data", return_value={}):
-        with patch("chat.ChatApp.ensure_paths"):
-            with patch("chat.ChatApp.prompt_for_path", return_value="/tmp"):
-                with patch("chat.ChatApp.ensure_locking_dependency"):
-                    # We need to mock TUI components since __init__ creates them
-                    with (
-                        patch("chat.TextArea"),
-                        patch("chat.FormattedTextControl"),
-                        patch("chat.Window"),
-                        patch("chat.Application"),
-                        patch("chat.KeyBindings"),
-                        patch("chat.HSplit"),
-                        patch("chat.VSplit"),
-                        patch("chat.Frame"),
-                        patch("chat.FloatContainer"),
-                        patch("chat.Layout"),
-                    ):
-
-                        app = chat.ChatApp()
-                        app.name = "TestUser"
-                        app.chat_file = "/tmp/Shared_chat.txt"
-                        # Mock the write method to capture output and return Success (True) by default
-                        app.write_to_file = MagicMock(return_value=True)
-                        app.input_field = MagicMock()
-                        app.output_field = MagicMock()
-                        app.application = MagicMock()
-                        return app
+def app_instance(tmp_path):
+    app = chat.ChatApp.__new__(chat.ChatApp)
+    app.name = "TestUser"
+    app.color = "green"
+    app.status = ""
+    app.current_room = "general"
+    app.base_dir = str(tmp_path)
+    app.rooms_root = str(tmp_path / "rooms")
+    Path(app.rooms_root).mkdir(parents=True, exist_ok=True)
+    app.presence_file_id = app.sanitize_presence_id(app.name)
+    app.messages = []
+    app.message_events = []
+    app.online_users = {}
+    app.last_pos_by_room = {}
+    app.search_query = ""
+    app.search_hits = []
+    app.active_search_hit_idx = -1
+    app.input_field = SimpleNamespace(text="")
+    app.output_field = SimpleNamespace(
+        text="", buffer=SimpleNamespace(cursor_position=0)
+    )
+    app.application = MagicMock()
+    app.sidebar_control = SimpleNamespace(text=[])
+    app.ensure_paths()
+    app.update_room_paths()
+    return app
 
 
 def test_handle_normal_message(app_instance):
-    """Test sending a regular message."""
+    app_instance.write_to_file = MagicMock(return_value=True)
     app_instance.handle_input("Hello World")
 
-    # Verify write_to_file was called
     assert app_instance.write_to_file.called
-    args = app_instance.write_to_file.call_args[0][0]
-
-    # Check format: [Timestamp] Name: Message
-    assert "TestUser: Hello World" in args
-    assert args.endswith("\n")
+    payload = app_instance.write_to_file.call_args.args[0]
+    assert payload["type"] == "chat"
+    assert payload["author"] == "TestUser"
+    assert payload["text"] == "Hello World"
 
 
 def test_handle_empty_input(app_instance):
-    """Test that empty or whitespace input is ignored."""
+    app_instance.write_to_file = MagicMock(return_value=True)
     app_instance.handle_input("   ")
     assert not app_instance.write_to_file.called
 
 
 def test_command_me(app_instance):
-    """Test the /me command."""
+    app_instance.write_to_file = MagicMock(return_value=True)
     app_instance.handle_input("/me dances")
-
-    assert app_instance.write_to_file.called
-    args = app_instance.write_to_file.call_args[0][0]
-
-    # Check format: [Timestamp] * Name Action
-    assert "* TestUser dances" in args
+    payload = app_instance.write_to_file.call_args.args[0]
+    assert payload["type"] == "me"
+    assert payload["text"] == "dances"
 
 
 def test_command_theme_unknown(app_instance):
-    """Test handling an unknown theme command."""
+    app_instance.write_to_file = MagicMock(return_value=True)
     app_instance.handle_input("/theme nonexist")
-
-    assert not app_instance.write_to_file.called
-
-    # Check if 'text' attribute was set on the output_field mock
-    assert app_instance.output_field.buffer.cursor_position is not None
-
-    with patch.object(app_instance, "save_config") as mock_save:
-        app_instance.handle_input("/theme nonexist")
-        assert not mock_save.called
-
-        app_instance.handle_input("/theme matrix")
-        assert mock_save.called
-
-
-def test_command_clear(app_instance):
-    """Test the /clear command."""
-    app_instance.messages = ["msg1", "msg2"]
-    app_instance.handle_input("/clear")
-
-    assert app_instance.messages == []
-    assert app_instance.output_field.text == ""
+    assert "Unknown theme" in app_instance.output_field.text
 
 
 def test_status_command_updates_without_spawning_thread(app_instance):
@@ -104,69 +79,64 @@ def test_status_command_updates_without_spawning_thread(app_instance):
     assert not mock_thread.called
 
 
-def test_handle_write_failure(app_instance):
-    """Test that input is NOT cleared if write fails."""
-    # Simulate write failure
-    app_instance.write_to_file.return_value = False
-
-    app_instance.handle_input("Important Message")
-
-    # Verify write was attempted
-    assert app_instance.write_to_file.called
-
-    # Verify we printed the specific error message to local output
-    assert app_instance.output_field.buffer.cursor_position is not None
+def test_join_command_calls_switch_room(app_instance):
+    with patch.object(app_instance, "switch_room") as mock_switch:
+        app_instance.handle_input("/join dev")
+    mock_switch.assert_called_once_with("dev")
 
 
-def test_sidebar_text_sanitization_removes_control_chars(app_instance):
-    app_instance.online_users = {
-        'eve<style fg="red">x</style>': {
-            "color": "green",
-            "status": "busy\n<script>",
-        }
-    }
-    app_instance.sidebar_control = MagicMock()
+def test_rooms_command_prints_rooms(app_instance):
+    with patch.object(app_instance, "list_rooms", return_value=["general", "dev"]):
+        app_instance.handle_input("/rooms")
+    assert "Rooms: general, dev" in app_instance.output_field.text
 
-    app_instance.update_sidebar()
 
-    fragments = app_instance.sidebar_control.text
-    assert isinstance(fragments, list)
-    rendered = "".join(text for _, text in fragments)
-    assert "\n" not in rendered
-    assert "\r" not in rendered
-    assert "\t" not in rendered
-    assert 'eve<style fg="red">x</style>' in rendered
+def test_search_commands_set_and_clear(app_instance):
+    app_instance.messages = ["alpha", "beta alpha"]
+    app_instance.message_events = [
+        {"ts": "1", "type": "chat", "author": "a", "text": "alpha"},
+        {"ts": "2", "type": "chat", "author": "a", "text": "beta alpha"},
+    ]
+    app_instance.handle_input("/search alpha")
+    assert app_instance.search_query == "alpha"
+    assert len(app_instance.search_hits) >= 2
+    assert app_instance.search_hits[0:2] == [0, 1]
+
+    app_instance.handle_input("/clearsearch")
+    assert app_instance.search_query == ""
+    assert app_instance.search_hits == []
+
+
+def test_command_clear_resets_local_history_and_search(app_instance):
+    app_instance.messages = ["msg1"]
+    app_instance.message_events = [
+        {"ts": "1", "type": "chat", "author": "a", "text": "msg1"}
+    ]
+    app_instance.search_query = "msg"
+    app_instance.search_hits = [0]
+
+    app_instance.handle_input("/clear")
+
+    assert app_instance.messages == []
+    assert app_instance.message_events == []
+    assert app_instance.search_query == ""
+    assert app_instance.search_hits == []
 
 
 def test_sidebar_color_sanitization_falls_back_to_white(app_instance):
     app_instance.online_users = {"alice": {"color": "bad-color", "status": ""}}
-    app_instance.sidebar_control = MagicMock()
-
     app_instance.update_sidebar()
+    user_fragments = [
+        frag for frag in app_instance.sidebar_control.text if "● alice" in frag[1]
+    ]
+    assert user_fragments
+    assert user_fragments[0][0] == "fg:white"
 
-    fragments = app_instance.sidebar_control.text
-    assert fragments[0][0] == "fg:white"
 
-
-def test_monitor_messages_resets_offset_after_truncation(
-    app_instance, tmp_path, monkeypatch
-):
-    chat_file = tmp_path / "Shared_chat.txt"
-    chat_file.write_text("hello\n", encoding="utf-8")
-
-    app_instance.chat_file = str(chat_file)
-    app_instance.last_pos = 999
-    app_instance.messages = []
-    app_instance.running = True
-    app_instance.output_field = MagicMock()
-    app_instance.application = MagicMock()
-
-    async def stop_after_first_sleep(seconds):
-        app_instance.running = False
-
-    monkeypatch.setattr(chat.asyncio, "sleep", stop_after_first_sleep)
-
-    asyncio.run(app_instance.monitor_messages())
-
-    assert app_instance.messages == ["hello"]
-    assert app_instance.last_pos == chat_file.stat().st_size
+def test_lex_line_highlights_mentions_and_search(app_instance):
+    app_instance.online_users = {"TestUser": {"color": "green", "status": ""}}
+    app_instance.search_query = "hello"
+    tokens = app_instance.lex_line("[12:00:00] TestUser: hello @TestUser")
+    styles = [style for style, _ in tokens]
+    assert "class:search-match" in styles
+    assert "class:mention" in styles

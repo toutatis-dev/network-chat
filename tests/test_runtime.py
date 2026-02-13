@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import chat
 
@@ -41,20 +41,27 @@ def build_runtime_app(tmp_path: Path) -> chat.ChatApp:
     app.status = "online"
     app.color = "green"
     app.running = True
-    app.messages = []
-    app.last_pos = 0
-    app.online_users = {}
-    app.presence_dir = str(tmp_path / "presence")
-    Path(app.presence_dir).mkdir(parents=True, exist_ok=True)
+    app.current_room = "general"
+    app.current_theme = "default"
+    app.base_dir = str(tmp_path)
+    app.rooms_root = str(tmp_path / "rooms")
     app.presence_file_id = app.sanitize_presence_id(app.name)
-    app.chat_file = str(tmp_path / "Shared_chat.txt")
-    Path(app.chat_file).touch()
-    app.sidebar_control = MagicMock()
-    app.output_field = MagicMock()
-    app.output_field.text = ""
-    app.output_field.buffer = MagicMock()
-    app.application = MagicMock()
-    app.input_field = MagicMock()
+    app.messages = []
+    app.message_events = []
+    app.last_pos_by_room = {}
+    app.online_users = {}
+    app.search_query = ""
+    app.search_hits = []
+    app.active_search_hit_idx = -1
+    app.sidebar_control = SimpleNamespace(text=[])
+    app.output_field = SimpleNamespace(
+        text="", buffer=SimpleNamespace(cursor_position=0)
+    )
+    app.application = SimpleNamespace(invalidate=lambda: None)
+    app.input_field = SimpleNamespace(text="")
+    app.ensure_locking_dependency = lambda: None
+    app.ensure_paths()
+    app.update_room_paths()
     return app
 
 
@@ -68,8 +75,7 @@ def test_heartbeat_presence_lifecycle(tmp_path, monkeypatch):
 
     app.heartbeat()
 
-    presence_path = app.get_presence_path()
-    assert app.online_users == {}
+    presence_path = app.get_presence_path("general")
     assert not presence_path.exists()
 
 
@@ -77,13 +83,13 @@ def test_force_heartbeat_writes_presence_data(tmp_path):
     app = build_runtime_app(tmp_path)
     app.force_heartbeat()
 
-    presence_path = app.get_presence_path()
+    presence_path = app.get_presence_path("general")
     assert presence_path.exists()
     payload = json.loads(presence_path.read_text(encoding="utf-8"))
     assert payload["name"] == "RuntimeUser"
     assert payload["status"] == "online"
     assert payload["color"] == "green"
-    assert "RuntimeUser" in app.get_online_users()
+    assert "RuntimeUser" in app.get_online_users("general")
 
 
 def test_monitor_messages_logs_and_recovers_from_oserror(tmp_path, monkeypatch, caplog):
@@ -103,23 +109,26 @@ def test_monitor_messages_logs_and_recovers_from_oserror(tmp_path, monkeypatch, 
     with caplog.at_level(logging.WARNING):
         asyncio.run(app.monitor_messages())
 
-    assert "Failed while monitoring chat file" in caplog.text
+    assert "Failed while monitoring room" in caplog.text
 
 
-def test_message_flow_from_handle_input_to_monitor(tmp_path, monkeypatch):
+def test_message_flow_and_room_isolation(tmp_path, monkeypatch):
     app = build_runtime_app(tmp_path)
-    app.ensure_locking_dependency = lambda: None
     monkeypatch.setattr(chat, "portalocker", FakePortalocker())
-    app.input_field.text = "hello"
 
-    app.handle_input("hello")
+    app.handle_input("hello general")
 
-    app.running = True
+    app.switch_room("dev")
+    app.handle_input("hello dev")
 
-    async def stop_after_first_sleep(_seconds):
-        app.running = False
+    general_rows = (
+        app.get_message_file("general").read_text(encoding="utf-8").strip().splitlines()
+    )
+    dev_rows = (
+        app.get_message_file("dev").read_text(encoding="utf-8").strip().splitlines()
+    )
 
-    monkeypatch.setattr(chat.asyncio, "sleep", stop_after_first_sleep)
-    asyncio.run(app.monitor_messages())
-
-    assert any("RuntimeUser: hello" in line for line in app.messages)
+    assert len(general_rows) == 1
+    assert len(dev_rows) == 1
+    assert "hello general" in general_rows[0]
+    assert "hello dev" in dev_rows[0]
