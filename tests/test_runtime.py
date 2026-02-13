@@ -69,7 +69,7 @@ def test_heartbeat_presence_lifecycle(tmp_path, monkeypatch):
     app.heartbeat()
 
     presence_path = app.get_presence_path()
-    assert app.name in app.online_users
+    assert app.online_users == {}
     assert not presence_path.exists()
 
 

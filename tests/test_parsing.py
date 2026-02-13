@@ -92,6 +92,18 @@ def test_command_clear(app_instance):
     assert app_instance.output_field.text == ""
 
 
+def test_status_command_updates_without_spawning_thread(app_instance):
+    with (
+        patch("chat.Thread") as mock_thread,
+        patch.object(app_instance, "force_heartbeat") as mock_force,
+    ):
+        app_instance.handle_input("/status Busy")
+
+    assert app_instance.status == "Busy"
+    assert mock_force.called
+    assert not mock_thread.called
+
+
 def test_handle_write_failure(app_instance):
     """Test that input is NOT cleared if write fails."""
     # Simulate write failure

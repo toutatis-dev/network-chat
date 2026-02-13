@@ -47,6 +47,7 @@ LOCK_MAX_ATTEMPTS = 20
 LOCK_BACKOFF_BASE_SECONDS = 0.05
 LOCK_BACKOFF_MAX_SECONDS = 0.5
 MAX_PRESENCE_ID_LENGTH = 64
+PRESENCE_REFRESH_INTERVAL_SECONDS = 1.0
 logger = logging.getLogger(__name__)
 
 # Themes Configuration
@@ -425,8 +426,6 @@ class ChatApp:
                     json.dump(data, f)
             except OSError as exc:
                 logger.warning("Failed heartbeat write to %s: %s", presence_path, exc)
-            self.online_users = self.get_online_users()
-            self.update_sidebar()
             time.sleep(10)
         if os.path.exists(presence_path):
             try:
@@ -453,6 +452,10 @@ class ChatApp:
                 fragments.append(("", "\n"))
         self.sidebar_control.text = fragments
         self.application.invalidate()
+
+    def refresh_presence_sidebar(self) -> None:
+        self.online_users = self.get_online_users()
+        self.update_sidebar()
 
     def sanitize_sidebar_text(self, value: Any, max_len: int) -> str:
         text = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
@@ -508,7 +511,7 @@ class ChatApp:
 
             if command == "/status":
                 self.status = args[:20]
-                Thread(target=self.force_heartbeat).start()
+                self.force_heartbeat()
                 self.input_field.text = ""
                 return
             if command in ["/exit", "/quit"]:
@@ -584,13 +587,17 @@ class ChatApp:
             }
             with open(presence_path, "w") as f:
                 json.dump(data, f)
-            self.online_users = self.get_online_users()
-            self.update_sidebar()
+            self.refresh_presence_sidebar()
         except (OSError, ValueError) as exc:
             logger.warning("Failed forced heartbeat update: %s", exc)
 
     async def monitor_messages(self) -> None:
+        next_presence_refresh = 0.0
         while self.running:
+            now = time.monotonic()
+            if now >= next_presence_refresh:
+                self.refresh_presence_sidebar()
+                next_presence_refresh = now + PRESENCE_REFRESH_INTERVAL_SECONDS
             if os.path.exists(self.chat_file):
                 try:
                     with open(self.chat_file, "r") as f:
