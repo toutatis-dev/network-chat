@@ -228,48 +228,6 @@ class AIService:
         if not memory_scopes:
             memory_scopes = ["team"]
 
-        selected_memory: list[dict[str, Any]] = []
-        memory_warning: str | None = None
-        effective_prompt = prompt
-        if not disable_memory:
-            rerank_route, _ = self.app.resolve_route(
-                task_class="memory_rerank",
-                provider_override=None,
-                model_override=None,
-            )
-            rerank_provider_cfg: dict[str, str] | None = None
-            if rerank_route is not None:
-                rerank_provider_cfg = {
-                    "provider": rerank_route["provider"],
-                    "api_key": rerank_route["api_key"],
-                    "model": rerank_route["model"],
-                }
-            selected_memory, memory_warning = self.app.select_memory_for_prompt(
-                prompt=prompt,
-                provider_cfg={
-                    "provider": provider,
-                    "api_key": route["api_key"],
-                    "model": model,
-                },
-                scopes=memory_scopes,
-                rerank_provider_cfg=rerank_provider_cfg,
-            )
-            memory_context = self.app.build_memory_context_block(selected_memory)
-            if memory_context:
-                effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
-        if memory_warning:
-            self.app.append_system_message(memory_warning)
-
-        memory_ids_used = [
-            str(entry.get("id", "")).strip()
-            for entry in selected_memory
-            if str(entry.get("id", "")).strip()
-        ]
-        memory_topics_used = [
-            str(entry.get("topic", "general")).strip() or "general"
-            for entry in selected_memory
-        ]
-
         request_id = self.app.start_ai_request_state(
             provider=provider, model=model, target_room=target_room, scope=scope
         )
@@ -281,8 +239,6 @@ class AIService:
         prompt_event["provider"] = provider
         prompt_event["model"] = model
         prompt_event["request_id"] = request_id
-        if memory_ids_used:
-            prompt_event["memory_ids_used"] = memory_ids_used
         if not self.app.write_to_file(prompt_event, room=target_room):
             self.app.clear_ai_request_state(request_id)
             self.app.append_system_message("Error: Failed to persist AI prompt.")
@@ -300,11 +256,11 @@ class AIService:
                 provider,
                 route["api_key"],
                 model,
-                effective_prompt,
+                prompt,
                 target_room,
                 is_private,
-                memory_ids_used,
-                memory_topics_used,
+                disable_memory,
+                memory_scopes,
             ),
             daemon=True,
         ).start()
@@ -321,15 +277,56 @@ class AIService:
         prompt: str,
         target_room: str,
         is_private: bool,
-        memory_ids_used: list[str],
-        memory_topics_used: list[str],
+        disable_memory: bool,
+        memory_scopes: list[str],
     ) -> None:
+        effective_prompt = prompt
+        memory_ids_used: list[str] = []
+        memory_topics_used: list[str] = []
+        if not disable_memory:
+            rerank_route, _ = self.app.resolve_route(
+                task_class="memory_rerank",
+                provider_override=None,
+                model_override=None,
+            )
+            rerank_provider_cfg: dict[str, str] | None = None
+            if rerank_route is not None:
+                rerank_provider_cfg = {
+                    "provider": rerank_route["provider"],
+                    "api_key": rerank_route["api_key"],
+                    "model": rerank_route["model"],
+                }
+            selected_memory, memory_warning = self.app.select_memory_for_prompt(
+                prompt=prompt,
+                provider_cfg={
+                    "provider": provider,
+                    "api_key": api_key,
+                    "model": model,
+                },
+                scopes=memory_scopes,
+                rerank_provider_cfg=rerank_provider_cfg,
+            )
+            if memory_warning:
+                self.app.append_system_message(memory_warning)
+            memory_context = self.app.build_memory_context_block(selected_memory)
+            if memory_context:
+                effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
+            memory_ids_used = [
+                str(entry.get("id", "")).strip()
+                for entry in selected_memory
+                if str(entry.get("id", "")).strip()
+            ]
+            memory_topics_used = [
+                str(entry.get("topic", "general")).strip() or "general"
+                for entry in selected_memory
+            ]
+
         answer, error_text = self.run_ai_request_with_retry(
             request_id=request_id,
             provider=provider,
             api_key=api_key,
             model=model,
-            prompt=prompt,
+            prompt=effective_prompt,
         )
         if error_text:
             error_event = self.app.build_event("system", error_text)

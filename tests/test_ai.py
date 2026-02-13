@@ -281,7 +281,7 @@ def test_ai_uses_memory_and_persists_citations(tmp_path):
     assert any("Shared memory context" in prompt for prompt in prompts)
     assert len(written) == 3
     assert written[0][1]["type"] == "ai_prompt"
-    assert written[0][1]["memory_ids_used"] == ["mem_1"]
+    assert "memory_ids_used" not in written[0][1]
     assert written[1][1]["type"] == "ai_response"
     assert written[1][1]["memory_ids_used"] == ["mem_1"]
     assert written[2][1]["type"] == "system"
