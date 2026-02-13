@@ -9,7 +9,11 @@ echo -e "
 venv/bin/flake8 chat.py --ignore=E501
 
 echo -e "
---- 3. Testing (Pytest) ---"
+--- 3. Type Checking (Mypy) ---"
+venv/bin/mypy chat.py
+
+echo -e "
+--- 4. Testing (Pytest) ---"
 venv/bin/pytest
 
 echo -e "

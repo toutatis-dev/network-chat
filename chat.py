@@ -3,6 +3,7 @@ import time
 import json
 import asyncio
 import string
+from typing import Any
 from datetime import datetime
 from threading import Thread
 
@@ -236,7 +237,7 @@ class ChatApp:
             mouse_support=True,
         )
 
-    def load_config_data(self):
+    def load_config_data(self) -> dict[str, Any]:
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -245,7 +246,7 @@ class ChatApp:
                 pass
         return {}
 
-    def save_config(self):
+    def save_config(self) -> None:
         with open(CONFIG_FILE, "w") as f:
             json.dump(
                 {
@@ -256,7 +257,7 @@ class ChatApp:
                 f,
             )
 
-    def get_style(self):
+    def get_style(self) -> Style:
         theme_dict = THEMES.get(self.current_theme, THEMES["default"])
         # Merge basic defaults if needed, but THEMES should be complete enough
         base_dict = {
@@ -266,7 +267,7 @@ class ChatApp:
         base_dict.update(theme_dict)
         return Style.from_dict(base_dict)
 
-    def get_available_drives(self):
+    def get_available_drives(self) -> list[str]:
         drives = []
         try:
             if os.name == "nt":
@@ -279,7 +280,7 @@ class ChatApp:
                 drives.append(f"{letter}:\\")
         return drives
 
-    def prompt_for_path(self):
+    def prompt_for_path(self) -> str:
         print("--- Huddle Chat Setup ---")
         print("Available Drives detected:")
         try:
@@ -323,15 +324,15 @@ class ChatApp:
                     except Exception as e:
                         print(f"Failed to create: {e}")
 
-    def ensure_paths(self):
+    def ensure_paths(self) -> None:
         if not os.path.exists(self.presence_dir):
             try:
                 os.makedirs(self.presence_dir)
             except Exception:
                 pass
 
-    def get_online_users(self):
-        online = {}
+    def get_online_users(self) -> dict[str, dict[str, Any]]:
+        online: dict[str, dict[str, Any]] = {}
         now = time.time()
         if not os.path.exists(self.presence_dir):
             return online
@@ -354,7 +355,7 @@ class ChatApp:
                 pass
         return online
 
-    def heartbeat(self):
+    def heartbeat(self) -> None:
         presence_path = os.path.join(self.presence_dir, self.name)
         while self.running:
             try:
@@ -376,7 +377,7 @@ class ChatApp:
             except Exception:
                 pass
 
-    def update_sidebar(self):
+    def update_sidebar(self) -> None:
         lines = []
         users = sorted(self.online_users.keys())
         for user in users:
@@ -390,7 +391,7 @@ class ChatApp:
         self.sidebar_control.text = HTML("\n".join(lines))
         self.application.invalidate()
 
-    def handle_input(self, text):
+    def handle_input(self, text: str) -> None:
         text = text.strip()
         if not text:
             return
@@ -465,7 +466,7 @@ class ChatApp:
             )
             self.output_field.buffer.cursor_position = len(self.output_field.text)
 
-    def write_to_file(self, msg):
+    def write_to_file(self, msg: str) -> bool:
         lock_file = self.chat_file + ".lock"
         acquired = False
         retries = 10
@@ -511,7 +512,7 @@ class ChatApp:
                 except Exception:
                     pass
 
-    def force_heartbeat(self):
+    def force_heartbeat(self) -> None:
         try:
             presence_path = os.path.join(self.presence_dir, self.name)
             data = {
@@ -526,7 +527,7 @@ class ChatApp:
         except Exception:
             pass
 
-    async def monitor_messages(self):
+    async def monitor_messages(self) -> None:
         while self.running:
             if os.path.exists(self.chat_file):
                 try:
@@ -549,7 +550,7 @@ class ChatApp:
                     pass
             await asyncio.sleep(0.5)
 
-    def run(self):
+    def run(self) -> None:
         print(f"Connecting to: {self.base_dir}")
 
         # Load persisted username

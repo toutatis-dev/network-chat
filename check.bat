@@ -15,7 +15,15 @@ IF %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo --- 3. Testing (Pytest) ---
+echo --- 3. Type Checking (Mypy) ---
+venv\Scripts\mypy chat.py
+IF %ERRORLEVEL% NEQ 0 (
+    echo [Error] Type checking failed.
+    exit /b 1
+)
+
+echo.
+echo --- 4. Testing (Pytest) ---
 venv\Scripts\pytest
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Tests failed.
