@@ -656,7 +656,7 @@ class ChatApp:
             if prev.isalnum() or prev == "_":
                 return None
 
-        prefix = text_before_cursor[at_index + 1:]
+        prefix = text_before_cursor[at_index + 1 :]
         if not prefix:
             return ("", 0)
 
