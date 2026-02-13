@@ -45,9 +45,17 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/next` - Jump to the next search match.
     *   `/prev` - Jump to the previous search match.
     *   `/clearsearch` - Clear the active search filter.
+    *   `/ai [--provider <gemini|openai>] [--model <name>] [--private] [prompt]` - Ask AI.
+    *   `/aiproviders` - Show local AI provider status.
+    *   `/aiconfig` - Show local AI config status.
+    *   `/aiconfig set-key <provider> <api-key>` - Save provider API key locally.
+    *   `/aiconfig set-model <provider> <model>` - Save default model locally.
+    *   `/aiconfig set-provider <provider>` - Set default provider locally.
+    *   `/share <target-room> <id|start-end>` - Share message(s) from local `ai-dm` into a shared room.
     *   `/setpath [path]` - Change the shared server path.
     *   `/clear` - Clear your local chat history.
     *   `/exit` - Quit the application.
+    *   `/join ai-dm` - Enter local-only private AI room.
 
 ## Storage Format
 
@@ -55,6 +63,8 @@ This version uses a room-based JSONL storage layout:
 
 *   `rooms/<room>/messages.jsonl` for chat events.
 *   `rooms/<room>/presence/<user-id>.json` for online presence.
+*   `.local_chat/rooms/ai-dm/messages.jsonl` for private local AI history.
+*   `.local_chat/ai_config.json` for local AI provider credentials and defaults.
 
 **Hard switch note:** legacy `Shared_chat.txt` is not read by this version.
 

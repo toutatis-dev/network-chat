@@ -6,11 +6,14 @@ import string
 import random
 import re
 import logging
+import shlex
 from typing import Any
 from datetime import datetime
 from threading import Thread
 from pathlib import Path
 from uuid import uuid4
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -42,6 +45,10 @@ else:
 
 # Global Configuration
 CONFIG_FILE = "chat_config.json"
+LOCAL_CHAT_ROOT = ".local_chat"
+AI_CONFIG_FILE = os.path.join(LOCAL_CHAT_ROOT, "ai_config.json")
+LOCAL_ROOMS_ROOT = os.path.join(LOCAL_CHAT_ROOT, "rooms")
+AI_DM_ROOM = "ai-dm"
 DEFAULT_PATH = None
 DEFAULT_ROOM = "general"
 MAX_MESSAGES = 200
@@ -52,6 +59,7 @@ LOCK_BACKOFF_MAX_SECONDS = 0.5
 MAX_PRESENCE_ID_LENGTH = 64
 CLIENT_ID_LENGTH = 12
 PRESENCE_REFRESH_INTERVAL_SECONDS = 1.0
+AI_HTTP_TIMEOUT_SECONDS = 45
 logger = logging.getLogger(__name__)
 
 # Themes Configuration
@@ -172,6 +180,10 @@ class SlashCompleter(Completer):
                 ("/next", "Jump to next search match"),
                 ("/prev", "Jump to previous search match"),
                 ("/clearsearch", "Clear active search"),
+                ("/ai", "Ask AI in current room or private mode"),
+                ("/aiproviders", "List configured AI providers"),
+                ("/aiconfig", "Manage local AI config"),
+                ("/share", "Share AI DM messages into a room"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
             ]
@@ -260,7 +272,9 @@ class ChatApp:
             self.base_dir = self.prompt_for_path()
 
         self.rooms_root = os.path.join(self.base_dir, "rooms")
+        self.ai_config = self.load_ai_config_data()
         self.ensure_paths()
+        self.ensure_local_paths()
         self.update_room_paths()
 
         legacy_path = os.path.join(self.base_dir, "Shared_chat.txt")
@@ -425,6 +439,233 @@ class ChatApp:
             return cleaned[:CLIENT_ID_LENGTH]
         return self.generate_client_id()
 
+    def is_local_room(self, room: str | None = None) -> bool:
+        active_room = self.sanitize_room_name(room or self.current_room)
+        return active_room == AI_DM_ROOM
+
+    def get_local_rooms_root(self) -> Path:
+        return Path(LOCAL_ROOMS_ROOT).resolve()
+
+    def get_local_room_dir(self, room: str | None = None) -> Path:
+        active_room = self.sanitize_room_name(room or self.current_room)
+        base = self.get_local_rooms_root()
+        target = (base / active_room).resolve()
+        if target.parent != base:
+            raise ValueError("Invalid local room path.")
+        return target
+
+    def get_local_message_file(self, room: str | None = None) -> Path:
+        return self.get_local_room_dir(room) / "messages.jsonl"
+
+    def ensure_local_paths(self) -> None:
+        try:
+            os.makedirs(LOCAL_CHAT_ROOT, exist_ok=True)
+            os.makedirs(self.get_local_rooms_root(), exist_ok=True)
+            local_room_dir = self.get_local_room_dir(AI_DM_ROOM)
+            os.makedirs(local_room_dir, exist_ok=True)
+            self.get_local_message_file(AI_DM_ROOM).touch(exist_ok=True)
+        except OSError as exc:
+            logger.warning("Failed ensuring local AI paths: %s", exc)
+
+    def get_default_ai_config(self) -> dict[str, Any]:
+        return {
+            "default_provider": "gemini",
+            "providers": {
+                "gemini": {"api_key": "", "model": "gemini-2.5-flash"},
+                "openai": {"api_key": "", "model": "gpt-4o-mini"},
+            },
+        }
+
+    def load_ai_config_data(self) -> dict[str, Any]:
+        default = self.get_default_ai_config()
+        path = Path(AI_CONFIG_FILE)
+        if not path.exists():
+            return default
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to load AI config from %s: %s", AI_CONFIG_FILE, exc)
+            return default
+
+        if not isinstance(loaded, dict):
+            return default
+        providers = loaded.get("providers", {})
+        if not isinstance(providers, dict):
+            providers = {}
+        merged = default
+        for provider_name in ("gemini", "openai"):
+            existing = providers.get(provider_name, {})
+            if isinstance(existing, dict):
+                merged["providers"][provider_name].update(existing)
+        default_provider = str(loaded.get("default_provider", "")).strip().lower()
+        if default_provider in merged["providers"]:
+            merged["default_provider"] = default_provider
+        return merged
+
+    def save_ai_config_data(self) -> None:
+        try:
+            os.makedirs(LOCAL_CHAT_ROOT, exist_ok=True)
+            with open(AI_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.ai_config, f, indent=2)
+        except OSError as exc:
+            logger.warning("Failed saving AI config: %s", exc)
+
+    def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
+        try:
+            tokens = shlex.split(arg_text)
+        except ValueError:
+            return {}, "Invalid /ai arguments. Check quotes and try again."
+
+        provider_override: str | None = None
+        model_override: str | None = None
+        is_private = False
+        prompt_parts: list[str] = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if token == "--provider":
+                if i + 1 >= len(tokens):
+                    return {}, "Usage: /ai --provider <gemini|openai> <prompt>"
+                provider_override = tokens[i + 1].strip().lower()
+                i += 2
+                continue
+            if token == "--model":
+                if i + 1 >= len(tokens):
+                    return {}, "Usage: /ai --model <model-name> <prompt>"
+                model_override = tokens[i + 1].strip()
+                i += 2
+                continue
+            if token == "--private":
+                is_private = True
+                i += 1
+                continue
+            prompt_parts.append(token)
+            i += 1
+
+        prompt = " ".join(prompt_parts).strip()
+        if not prompt:
+            return (
+                {},
+                "Usage: /ai [--provider <name>] [--model <name>] [--private] <prompt>",
+            )
+
+        return {
+            "provider_override": provider_override,
+            "model_override": model_override,
+            "is_private": is_private,
+            "prompt": prompt,
+        }, None
+
+    def resolve_ai_provider_config(
+        self, provider_override: str | None, model_override: str | None
+    ) -> tuple[dict[str, str], str | None]:
+        providers = self.ai_config.get("providers", {})
+        default_provider = str(self.ai_config.get("default_provider", "gemini")).lower()
+        provider = provider_override or default_provider
+        if provider not in ("gemini", "openai"):
+            return {}, f"Unknown provider '{provider}'. Use /aiproviders."
+        provider_data = providers.get(provider, {})
+        if not isinstance(provider_data, dict):
+            provider_data = {}
+        api_key = str(provider_data.get("api_key", "")).strip()
+        model = str(model_override or provider_data.get("model", "")).strip()
+        if not api_key:
+            return (
+                {},
+                f"Provider '{provider}' is missing API key. Run /aiconfig set-key {provider} <API_KEY>.",
+            )
+        if not model:
+            return (
+                {},
+                f"Provider '{provider}' is missing model. Run /aiconfig set-model {provider} <model>.",
+            )
+        return {"provider": provider, "api_key": api_key, "model": model}, None
+
+    def call_ai_provider(
+        self, provider: str, api_key: str, model: str, prompt: str
+    ) -> str:
+        if provider == "gemini":
+            return self.call_gemini_api(api_key, model, prompt)
+        if provider == "openai":
+            return self.call_openai_api(api_key, model, prompt)
+        raise ValueError(f"Unsupported provider '{provider}'")
+
+    def post_json_request(
+        self, url: str, headers: dict[str, str], payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8")
+        request = urlrequest.Request(
+            url=url,
+            data=body,
+            headers={"Content-Type": "application/json", **headers},
+            method="POST",
+        )
+        try:
+            with urlrequest.urlopen(
+                request, timeout=AI_HTTP_TIMEOUT_SECONDS
+            ) as response:
+                raw = response.read().decode("utf-8")
+                data = json.loads(raw) if raw else {}
+                if isinstance(data, dict):
+                    return data
+                return {}
+        except urlerror.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"HTTP {exc.code} from provider. {detail[:200]}"
+            ) from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Provider request failed: {exc}") from exc
+
+    def call_gemini_api(self, api_key: str, model: str, prompt: str) -> str:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:"
+            f"generateContent?key={api_key}"
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        data = self.post_json_request(url, {}, payload)
+        candidates = data.get("candidates", [])
+        if not isinstance(candidates, list) or not candidates:
+            raise RuntimeError("Gemini returned no candidates.")
+        first = candidates[0]
+        if not isinstance(first, dict):
+            raise RuntimeError("Gemini response format was invalid.")
+        content = first.get("content", {})
+        if not isinstance(content, dict):
+            raise RuntimeError("Gemini response content missing.")
+        parts = content.get("parts", [])
+        if not isinstance(parts, list) or not parts:
+            raise RuntimeError("Gemini returned empty content.")
+        for part in parts:
+            if isinstance(part, dict):
+                text = str(part.get("text", "")).strip()
+                if text:
+                    return text
+        raise RuntimeError("Gemini response did not contain text.")
+
+    def call_openai_api(self, api_key: str, model: str, prompt: str) -> str:
+        url = "https://api.openai.com/v1/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+        data = self.post_json_request(url, headers, payload)
+        choices = data.get("choices", [])
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("OpenAI returned no choices.")
+        first = choices[0]
+        if not isinstance(first, dict):
+            raise RuntimeError("OpenAI response format was invalid.")
+        message = first.get("message", {})
+        if not isinstance(message, dict):
+            raise RuntimeError("OpenAI response message missing.")
+        text = str(message.get("content", "")).strip()
+        if not text:
+            raise RuntimeError("OpenAI response was empty.")
+        return text
+
     def get_room_dir(self, room: str | None = None) -> Path:
         active_room = self.sanitize_room_name(room or self.current_room)
         base = Path(self.rooms_root).resolve()
@@ -434,9 +675,13 @@ class ChatApp:
         return target
 
     def get_message_file(self, room: str | None = None) -> Path:
+        if self.is_local_room(room):
+            return self.get_local_message_file(room)
         return self.get_room_dir(room) / "messages.jsonl"
 
     def get_presence_dir(self, room: str | None = None) -> Path:
+        if self.is_local_room(room):
+            return self.get_local_room_dir(room) / "presence"
         return self.get_room_dir(room) / "presence"
 
     def get_presence_path(self, room: str | None = None) -> Path:
@@ -455,10 +700,11 @@ class ChatApp:
         rooms: list[str] = []
         root = Path(self.rooms_root)
         if not root.exists():
-            return [self.current_room]
+            return sorted({self.current_room, AI_DM_ROOM})
         for entry in root.iterdir():
             if entry.is_dir():
                 rooms.append(self.sanitize_room_name(entry.name))
+        rooms.append(AI_DM_ROOM)
         if self.current_room not in rooms:
             rooms.append(self.current_room)
         return sorted(set(rooms))
@@ -510,15 +756,18 @@ class ChatApp:
     def ensure_paths(self) -> None:
         try:
             os.makedirs(self.rooms_root, exist_ok=True)
-            room_dir = self.get_room_dir()
-            os.makedirs(room_dir, exist_ok=True)
-            os.makedirs(self.get_presence_dir(), exist_ok=True)
-            self.get_message_file().touch(exist_ok=True)
+            if not self.is_local_room():
+                room_dir = self.get_room_dir()
+                os.makedirs(room_dir, exist_ok=True)
+                os.makedirs(self.get_presence_dir(), exist_ok=True)
+                self.get_message_file().touch(exist_ok=True)
         except OSError as exc:
             logger.warning("Failed ensuring room paths: %s", exc)
 
     def get_online_users(self, room: str | None = None) -> dict[str, dict[str, Any]]:
         online: dict[str, dict[str, Any]] = {}
+        if self.is_local_room(room):
+            return online
         now = time.time()
         presence_dir = self.get_presence_dir(room)
         if not presence_dir.exists():
@@ -561,6 +810,20 @@ class ChatApp:
         while self.running:
             try:
                 room = self.current_room
+                if self.is_local_room(room):
+                    if current_presence_path is not None:
+                        try:
+                            current_presence_path.unlink(missing_ok=True)
+                        except OSError as exc:
+                            logger.warning(
+                                "Failed cleaning presence while in local room %s: %s",
+                                current_presence_path,
+                                exc,
+                            )
+                        current_presence_path = None
+                    current_room = room
+                    time.sleep(10)
+                    continue
                 presence_path = self.get_presence_path(room)
                 if current_presence_path is not None and (
                     room != current_room or current_presence_path != presence_path
@@ -600,6 +863,14 @@ class ChatApp:
                 )
 
     def update_sidebar(self) -> None:
+        if self.is_local_room():
+            self.sidebar_control.text = [
+                ("fg:#aaaaaa", f"Room: #{self.current_room} (local)"),
+                ("", "\n"),
+                ("fg:#888888", "Private AI DM"),
+            ]
+            self.application.invalidate()
+            return
         fragments: list[tuple[str, str]] = [
             ("fg:#aaaaaa", f"Room: #{self.current_room}"),
             ("", "\n"),
@@ -702,6 +973,13 @@ class ChatApp:
             return f"[{ts}] * {author} {text}".rstrip()
         if event_type == "system":
             return f"[System] {text}"
+        if event_type == "ai_prompt":
+            return f"[{ts}] {author} -> AI: {text}"
+        if event_type == "ai_response":
+            provider = self.sanitize_sidebar_text(event.get("provider", "ai"), 24)
+            model = self.sanitize_sidebar_text(event.get("model", ""), 40)
+            model_suffix = f":{model}" if model else ""
+            return f"[{ts}] AI[{provider}{model_suffix}]: {text}"
         return f"[{ts}] {author}: {text}"
 
     def parse_event_line(self, line: str) -> dict[str, Any] | None:
@@ -889,6 +1167,233 @@ class ChatApp:
         self.application.invalidate()
         self.rebuild_search_hits()
 
+    def get_ai_provider_summary(self) -> str:
+        providers = self.ai_config.get("providers", {})
+        default_provider = str(self.ai_config.get("default_provider", "gemini"))
+        parts: list[str] = [f"default={default_provider}"]
+        for provider in ("gemini", "openai"):
+            data = providers.get(provider, {})
+            if not isinstance(data, dict):
+                data = {}
+            configured = (
+                "configured" if str(data.get("api_key", "")).strip() else "missing-key"
+            )
+            model = str(data.get("model", "")).strip() or "<unset>"
+            parts.append(f"{provider}({configured}, model={model})")
+        return "; ".join(parts)
+
+    def handle_aiconfig_command(self, args: str) -> None:
+        if not args.strip():
+            self.append_system_message(f"AI config: {self.get_ai_provider_summary()}")
+            return
+
+        try:
+            tokens = shlex.split(args)
+        except ValueError:
+            self.append_system_message("Invalid /aiconfig syntax. Check quotes.")
+            return
+        if not tokens:
+            self.append_system_message(f"AI config: {self.get_ai_provider_summary()}")
+            return
+
+        providers = {"gemini", "openai"}
+        provider_first = len(tokens) >= 2 and tokens[0].strip().lower() in providers
+        command_second = tokens[1].strip().lower() in {"set-key", "set-model"}
+        if provider_first and command_second:
+            tokens = [tokens[1], tokens[0], *tokens[2:]]
+
+        action = tokens[0].lower()
+        if action == "set-key" and len(tokens) >= 3:
+            provider = tokens[1].strip().lower()
+            key = tokens[2].strip()
+            if provider not in ("gemini", "openai"):
+                self.append_system_message("Unknown provider. Use gemini or openai.")
+                return
+            self.ai_config.setdefault("providers", {})
+            provider_cfg = self.ai_config["providers"].setdefault(provider, {})
+            if not isinstance(provider_cfg, dict):
+                provider_cfg = {}
+                self.ai_config["providers"][provider] = provider_cfg
+            provider_cfg["api_key"] = key
+            self.save_ai_config_data()
+            self.append_system_message(f"Saved API key for {provider}.")
+            return
+
+        if action == "set-model" and len(tokens) >= 3:
+            provider = tokens[1].strip().lower()
+            model = tokens[2].strip()
+            if provider not in ("gemini", "openai"):
+                self.append_system_message("Unknown provider. Use gemini or openai.")
+                return
+            self.ai_config.setdefault("providers", {})
+            provider_cfg = self.ai_config["providers"].setdefault(provider, {})
+            if not isinstance(provider_cfg, dict):
+                provider_cfg = {}
+                self.ai_config["providers"][provider] = provider_cfg
+            provider_cfg["model"] = model
+            self.save_ai_config_data()
+            self.append_system_message(f"Saved model for {provider}: {model}")
+            return
+
+        if action == "set-provider" and len(tokens) >= 2:
+            provider = tokens[1].strip().lower()
+            if provider not in ("gemini", "openai"):
+                self.append_system_message("Unknown provider. Use gemini or openai.")
+                return
+            self.ai_config["default_provider"] = provider
+            self.save_ai_config_data()
+            self.append_system_message(f"Default AI provider set to {provider}.")
+            return
+
+        self.append_system_message(
+            "Usage: /aiconfig [set-key <provider> <key> | set-model <provider> <model> | set-provider <provider>] "
+            "(also accepts: <provider> set-key <key>, <provider> set-model <model>)"
+        )
+
+    def parse_share_selector(self, selector: str) -> list[dict[str, Any]]:
+        if not self.message_events:
+            return []
+        selector = selector.strip()
+        if "-" in selector:
+            left, right = selector.split("-", 1)
+            start = int(left)
+            end = int(right)
+            if start > end:
+                start, end = end, start
+            start = max(start, 1)
+            end = min(end, len(self.message_events))
+            return self.message_events[start - 1 : end]
+        index = int(selector)
+        if index < 1 or index > len(self.message_events):
+            return []
+        return [self.message_events[index - 1]]
+
+    def handle_share_command(self, args: str) -> None:
+        if not self.is_local_room():
+            self.append_system_message("Use /share only inside #ai-dm.")
+            return
+        try:
+            tokens = shlex.split(args)
+        except ValueError:
+            self.append_system_message("Invalid /share syntax. Check quotes.")
+            return
+        if len(tokens) < 2:
+            self.append_system_message("Usage: /share <target-room> <id|start-end>")
+            return
+        target_room = self.sanitize_room_name(tokens[0])
+        if self.is_local_room(target_room):
+            self.append_system_message("Cannot share into local-only room.")
+            return
+        selector = tokens[1]
+        try:
+            selected_events = self.parse_share_selector(selector)
+        except ValueError:
+            self.append_system_message(
+                "Invalid selector. Use numeric id or range like 2-4."
+            )
+            return
+        if not selected_events:
+            self.append_system_message("No matching messages to share.")
+            return
+
+        shared_count = 0
+        for event in selected_events:
+            event_type = str(event.get("type", "chat"))
+            if event_type not in ("ai_prompt", "ai_response", "chat", "me", "system"):
+                continue
+            payload = self.build_event(event_type, str(event.get("text", "")))
+            if event_type in ("ai_prompt", "ai_response"):
+                payload["provider"] = event.get(
+                    "provider", self.ai_config.get("default_provider", "ai")
+                )
+                payload["model"] = event.get("model", "")
+            if self.write_to_file(payload, room=target_room):
+                shared_count += 1
+        self.append_system_message(
+            f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
+        )
+
+    def handle_ai_command(self, args: str) -> None:
+        parsed, parse_error = self.parse_ai_args(args)
+        if parse_error:
+            self.append_system_message(parse_error)
+            return
+
+        provider_cfg, config_error = self.resolve_ai_provider_config(
+            parsed.get("provider_override"),
+            parsed.get("model_override"),
+        )
+        if config_error:
+            self.append_system_message(config_error)
+            return
+
+        assert provider_cfg
+        provider = provider_cfg["provider"]
+        model = provider_cfg["model"]
+        prompt = parsed["prompt"]
+        is_private = bool(parsed.get("is_private")) or self.is_local_room()
+        target_room = AI_DM_ROOM if is_private else self.current_room
+
+        prompt_event = self.build_event("ai_prompt", prompt)
+        prompt_event["provider"] = provider
+        prompt_event["model"] = model
+        if not self.write_to_file(prompt_event, room=target_room):
+            self.append_system_message("Error: Failed to persist AI prompt.")
+            return
+
+        status_scope = "private" if is_private else "room"
+        self.append_system_message(
+            f"AI request sent ({status_scope}) via {provider}:{model}."
+        )
+
+        Thread(
+            target=self.process_ai_response,
+            args=(
+                provider,
+                provider_cfg["api_key"],
+                model,
+                prompt,
+                target_room,
+                is_private,
+            ),
+            daemon=True,
+        ).start()
+
+    def process_ai_response(
+        self,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        target_room: str,
+        is_private: bool,
+    ) -> None:
+        try:
+            answer = self.call_ai_provider(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+            )
+        except Exception as exc:
+            error_event = self.build_event("system", f"AI request failed: {exc}")
+            self.write_to_file(error_event, room=target_room)
+            if is_private and not self.is_local_room():
+                self.append_system_message(f"AI request failed in #ai-dm: {exc}")
+            return
+
+        response_event = self.build_event("ai_response", answer)
+        response_event["provider"] = provider
+        response_event["model"] = model
+        if not self.write_to_file(response_event, room=target_room):
+            self.append_system_message("Error: Failed to persist AI response.")
+            return
+
+        if is_private and not self.is_local_room():
+            self.append_system_message(
+                "Private AI response saved to #ai-dm. Use /join ai-dm to review."
+            )
+
     def handle_input(self, text: str) -> None:
         text = text.strip()
         if not text:
@@ -944,6 +1449,26 @@ class ChatApp:
 
             if command == "/room":
                 self.append_system_message(f"Current room: #{self.current_room}")
+                self.input_field.text = ""
+                return
+
+            if command == "/aiproviders":
+                self.append_system_message(self.get_ai_provider_summary())
+                self.input_field.text = ""
+                return
+
+            if command == "/aiconfig":
+                self.handle_aiconfig_command(args)
+                self.input_field.text = ""
+                return
+
+            if command == "/ai":
+                self.handle_ai_command(args)
+                self.input_field.text = ""
+                return
+
+            if command == "/share":
+                self.handle_share_command(args)
                 self.input_field.text = ""
                 return
 
@@ -1019,11 +1544,13 @@ class ChatApp:
                 "Error: Could not send message. Network busy or locked."
             )
 
-    def write_to_file(self, payload: dict[str, Any] | str) -> bool:
+    def write_to_file(
+        self, payload: dict[str, Any] | str, room: str | None = None
+    ) -> bool:
         self.ensure_locking_dependency()
         assert portalocker is not None
 
-        message_file = self.get_message_file()
+        message_file = self.get_message_file(room)
         for attempt in range(LOCK_MAX_ATTEMPTS):
             try:
                 with portalocker.Lock(
@@ -1060,6 +1587,9 @@ class ChatApp:
         return False
 
     def force_heartbeat(self) -> None:
+        if self.is_local_room():
+            self.refresh_presence_sidebar()
+            return
         try:
             presence_path = self.get_presence_path()
             data = {
