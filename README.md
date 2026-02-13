@@ -95,6 +95,9 @@ This project uses a comprehensive suite of quality checks to maintain code resil
 *   `huddle_chat/constants.py` - shared constants, themes, and defaults.
 *   `huddle_chat/ui.py` - prompt-toolkit completer/lexer UI components.
 *   `huddle_chat/services/` - extracted domain services (`ai`, `memory`, `storage`, `runtime`).
+*   `huddle_chat/commands/` - slash-command registry and handlers.
+*   `huddle_chat/providers/` - provider-specific AI clients (`gemini`, `openai`).
+*   `huddle_chat/models.py` - shared TypedDicts for events/config/data shapes.
 *   `tests/` - unit and behavior tests.
 
 ### Quality Checks
