@@ -81,6 +81,12 @@ This version uses a room-based JSONL storage layout:
 
 **Hard switch note:** legacy `Shared_chat.txt` is not read by this version.
 
+Canonical shared-file contract docs:
+
+*   `docs/shared-file-contract.md` - authoritative wire format for shared files.
+*   `docs/compatibility-policy.md` - compatibility/versioning rules.
+*   `docs/shared-file-examples/` - example valid/invalid records.
+
 ## Requirements
 
 *   **Python 3.x** must be installed and added to your system PATH.
@@ -98,6 +104,7 @@ This project uses a comprehensive suite of quality checks to maintain code resil
 *   `huddle_chat/commands/` - slash-command registry and handlers.
 *   `huddle_chat/providers/` - provider-specific AI clients (`gemini`, `openai`).
 *   `huddle_chat/models.py` - shared TypedDicts for events/config/data shapes.
+*   `docs/` - canonical shared-file contract, compatibility policy, and examples.
 *   `tests/` - unit and behavior tests.
 
 ### Quality Checks

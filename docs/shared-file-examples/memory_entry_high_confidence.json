@@ -1,0 +1,12 @@
+{
+  "id": "mem_1771012800_a1b2c3",
+  "ts": "2026-02-13T12:01:00",
+  "author": "alice",
+  "summary": "Use runbook A before rollback in production.",
+  "topic": "deploy",
+  "confidence": "high",
+  "source": "room:general request:req_123 ts:2026-02-13T12:00:10",
+  "room": "general",
+  "origin_event_ref": "req_123",
+  "tags": ["runbook", "rollback"]
+}

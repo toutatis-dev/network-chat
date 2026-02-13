@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "ts": "2026-02-13T12:00:10",
+  "type": "ai_response",
+  "author": "alice",
+  "text": "Use runbook A for rollback.",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash",
+  "request_id": "abc123def0",
+  "memory_ids_used": ["mem_173945_abcdef"],
+  "memory_topics_used": ["deploy"]
+}
