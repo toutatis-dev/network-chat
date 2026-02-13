@@ -1709,11 +1709,9 @@ class ChatApp:
             error_event = self.build_event("system", error_text)
             error_event["request_id"] = request_id
             self.write_to_file(error_event, room=target_room)
-            should_notify_private_failure = (
-                is_private
-                and not self.is_local_room()
-                and "cancelled" not in error_text.lower()
-            )
+            should_notify_private_failure = is_private and not self.is_local_room()
+            if should_notify_private_failure:
+                should_notify_private_failure = "cancelled" not in error_text.lower()
             if should_notify_private_failure:
                 self.append_system_message(f"AI request failed in #ai-dm: {error_text}")
             self.clear_ai_request_state(request_id)
