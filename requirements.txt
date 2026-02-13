@@ -1,3 +1,4 @@
 colorama
 rich
 prompt_toolkit
+pytest
