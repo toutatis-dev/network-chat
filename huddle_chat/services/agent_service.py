@@ -22,7 +22,16 @@ class AgentService:
             "tool_policy": {
                 "mode": "scoped_allowlist",
                 "require_approval": True,
-                "allowed_tools": ["search", "read", "tests", "lint", "mypy"],
+                "allowed_tools": [
+                    "search_repo",
+                    "list_files",
+                    "read_file",
+                    "run_tests",
+                    "run_lint",
+                    "run_typecheck",
+                    "git_status",
+                    "git_diff",
+                ],
             },
             "memory_policy": {"scopes": ["private", "repo", "team"]},
             "routing_policy": {

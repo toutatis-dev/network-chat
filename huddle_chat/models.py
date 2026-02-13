@@ -40,6 +40,7 @@ class ParsedAIArgs(TypedDict, total=False):
     disable_memory: bool
     prompt: str
     memory_scope_override: list[str]
+    action_mode: bool
 
 
 class ToolPolicy(TypedDict, total=False):
@@ -87,6 +88,11 @@ class ToolActionRequest(TypedDict):
     command_preview: str
     risk_level: str
     status: str
+    request_id: str
+    room: str
+    inputs: dict[str, Any]
+    ttl_seconds: int
+    expires_at: str
 
 
 class ToolActionDecision(TypedDict):
@@ -101,6 +107,31 @@ class ToolActionResult(TypedDict):
     ts: str
     result: str
     output_preview: str
+    exit_code: int | None
+    duration_ms: int
+
+
+class ToolDefinition(TypedDict):
+    name: str
+    title: str
+    description: str
+    inputSchema: dict[str, Any]
+    annotations: dict[str, Any]
+
+
+class ToolCallRequest(TypedDict):
+    toolName: str
+    arguments: dict[str, Any]
+    requestId: str
+    actionId: str
+    room: str
+    user: str
+
+
+class ToolCallResult(TypedDict):
+    content: list[dict[str, Any]]
+    isError: bool
+    meta: dict[str, Any]
 
 
 JsonDict = dict[str, Any]
