@@ -121,9 +121,10 @@ def test_get_online_users_skips_malformed_presence_files(tmp_path):
     (presence_dir / "badclient456").write_text("{bad-json", encoding="utf-8")
 
     online = app.get_online_users("general")
-    assert "goodclient123" in online
-    assert online["goodclient123"]["name"] == "Alice"
-    assert "badclient456" not in online
+    assert len(online) == 1
+    only_user = next(iter(online.values()))
+    assert only_user["name"] == "Alice"
+    assert only_user["status"] == "online"
 
 
 def test_load_memory_entries_skips_invalid_rows(tmp_path):
