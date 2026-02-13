@@ -9,7 +9,7 @@ import logging
 import shlex
 from typing import Any
 from datetime import datetime
-from threading import Thread
+from threading import Event, Lock, Thread
 from pathlib import Path
 from uuid import uuid4
 from urllib import error as urlerror
@@ -60,6 +60,7 @@ MAX_PRESENCE_ID_LENGTH = 64
 CLIENT_ID_LENGTH = 12
 PRESENCE_REFRESH_INTERVAL_SECONDS = 1.0
 AI_HTTP_TIMEOUT_SECONDS = 45
+AI_RETRY_BACKOFF_SECONDS = 1.2
 logger = logging.getLogger(__name__)
 
 # Themes Configuration
@@ -254,6 +255,16 @@ class ChatApp:
         self.search_query = ""
         self.search_hits: list[int] = []
         self.active_search_hit_idx = -1
+        self.ai_state_lock = Lock()
+        self.ai_active_request_id: str | None = None
+        self.ai_active_started_at = 0.0
+        self.ai_active_provider = ""
+        self.ai_active_model = ""
+        self.ai_active_scope = ""
+        self.ai_active_room = ""
+        self.ai_retry_count = 0
+        self.ai_preview_text = ""
+        self.ai_cancel_event = Event()
 
         # Load Config
         config_data = self.load_config_data()
@@ -1054,6 +1065,9 @@ class ChatApp:
             self.render_event_for_display(event, idx + 1)
             for idx, event in enumerate(self.message_events)
         ]
+        preview_line = self.get_ai_preview_line()
+        if preview_line:
+            self.messages.append(preview_line)
         if len(self.messages) > MAX_MESSAGES:
             overflow = len(self.messages) - MAX_MESSAGES
             self.messages = self.messages[overflow:]
@@ -1061,6 +1075,21 @@ class ChatApp:
         self.output_field.text = "\n".join(self.messages)
         self.output_field.buffer.cursor_position = len(self.output_field.text)
         self.application.invalidate()
+
+    def get_ai_preview_line(self) -> str:
+        with self.ai_state_lock:
+            if not self.ai_active_request_id:
+                return ""
+            if self.ai_active_room != self.current_room:
+                return ""
+            elapsed = int(max(0, time.monotonic() - self.ai_active_started_at))
+            provider = self.ai_active_provider or "ai"
+            model = self.ai_active_model
+            model_suffix = f":{model}" if model else ""
+            base = f"[AI pending {provider}{model_suffix} {elapsed}s]"
+            if self.ai_preview_text:
+                return f"{base} {self.ai_preview_text}"
+            return base
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1325,7 +1354,143 @@ class ChatApp:
             f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
         )
 
+    def is_transient_ai_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        if "http 429" in text:
+            return True
+        if "http 5" in text:
+            return True
+        if "timed out" in text or "timeout" in text:
+            return True
+        if "temporarily unavailable" in text:
+            return True
+        return False
+
+    def start_ai_request_state(
+        self, provider: str, model: str, target_room: str, scope: str
+    ) -> str | None:
+        with self.ai_state_lock:
+            if self.ai_active_request_id is not None:
+                return None
+            request_id = uuid4().hex[:10]
+            self.ai_active_request_id = request_id
+            self.ai_active_started_at = time.monotonic()
+            self.ai_active_provider = provider
+            self.ai_active_model = model
+            self.ai_active_scope = scope
+            self.ai_active_room = target_room
+            self.ai_retry_count = 0
+            self.ai_preview_text = "connecting..."
+            self.ai_cancel_event = Event()
+            return request_id
+
+    def clear_ai_request_state(self, request_id: str) -> None:
+        with self.ai_state_lock:
+            if self.ai_active_request_id != request_id:
+                return
+            self.ai_active_request_id = None
+            self.ai_active_started_at = 0.0
+            self.ai_active_provider = ""
+            self.ai_active_model = ""
+            self.ai_active_scope = ""
+            self.ai_active_room = ""
+            self.ai_retry_count = 0
+            self.ai_preview_text = ""
+            self.ai_cancel_event = Event()
+
+    def is_ai_request_active(self) -> bool:
+        with self.ai_state_lock:
+            return self.ai_active_request_id is not None
+
+    def set_ai_preview_text(self, request_id: str, text: str) -> None:
+        with self.ai_state_lock:
+            if self.ai_active_request_id != request_id:
+                return
+            self.ai_preview_text = text[:180]
+        self.refresh_output_from_events()
+
+    def is_ai_request_cancelled(self, request_id: str) -> bool:
+        with self.ai_state_lock:
+            if self.ai_active_request_id != request_id:
+                return True
+            return self.ai_cancel_event.is_set()
+
+    def request_ai_cancel(self) -> bool:
+        with self.ai_state_lock:
+            if self.ai_active_request_id is None:
+                return False
+            self.ai_cancel_event.set()
+            self.ai_preview_text = "cancellation requested..."
+            return True
+
+    def build_ai_status_text(self) -> str:
+        with self.ai_state_lock:
+            if self.ai_active_request_id is None:
+                return "No active AI request."
+            elapsed = int(max(0, time.monotonic() - self.ai_active_started_at))
+            return (
+                f"AI status: request={self.ai_active_request_id}, "
+                f"provider={self.ai_active_provider}, model={self.ai_active_model}, "
+                f"scope={self.ai_active_scope}, room=#{self.ai_active_room}, "
+                f"elapsed={elapsed}s, retry={self.ai_retry_count}, "
+                f"cancelled={self.ai_cancel_event.is_set()}"
+            )
+
+    def run_ai_preview_pulse(self, request_id: str) -> None:
+        while True:
+            with self.ai_state_lock:
+                if self.ai_active_request_id != request_id:
+                    return
+            self.refresh_output_from_events()
+            time.sleep(0.5)
+
+    def run_ai_request_with_retry(
+        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+    ) -> tuple[str | None, str | None]:
+        try:
+            answer = self.call_ai_provider(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+            )
+            return answer, None
+        except Exception as exc:
+            if self.is_ai_request_cancelled(request_id):
+                return None, "AI request cancelled."
+            if not self.is_transient_ai_error(exc):
+                return None, f"AI request failed: {exc}"
+
+            with self.ai_state_lock:
+                if self.ai_active_request_id == request_id:
+                    self.ai_retry_count = 1
+            self.set_ai_preview_text(request_id, "retrying after transient error...")
+            time.sleep(AI_RETRY_BACKOFF_SECONDS)
+            if self.is_ai_request_cancelled(request_id):
+                return None, "AI request cancelled."
+            try:
+                answer = self.call_ai_provider(
+                    provider=provider,
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                )
+                return answer, None
+            except Exception as retry_exc:
+                return None, f"AI request failed after retry: {retry_exc}"
+
     def handle_ai_command(self, args: str) -> None:
+        lowered = args.strip().lower()
+        if lowered == "status":
+            self.append_system_message(self.build_ai_status_text())
+            return
+        if lowered == "cancel":
+            if self.request_ai_cancel():
+                self.append_system_message("AI cancellation requested.")
+            else:
+                self.append_system_message("No active AI request.")
+            return
+
         parsed, parse_error = self.parse_ai_args(args)
         if parse_error:
             self.append_system_message(parse_error)
@@ -1345,22 +1510,33 @@ class ChatApp:
         prompt = parsed["prompt"]
         is_private = bool(parsed.get("is_private")) or self.is_local_room()
         target_room = AI_DM_ROOM if is_private else self.current_room
+        scope = "private" if is_private else "room"
+
+        request_id = self.start_ai_request_state(
+            provider=provider, model=model, target_room=target_room, scope=scope
+        )
+        if request_id is None:
+            self.append_system_message("AI busy. Use /ai status or /ai cancel.")
+            return
 
         prompt_event = self.build_event("ai_prompt", prompt)
         prompt_event["provider"] = provider
         prompt_event["model"] = model
+        prompt_event["request_id"] = request_id
         if not self.write_to_file(prompt_event, room=target_room):
+            self.clear_ai_request_state(request_id)
             self.append_system_message("Error: Failed to persist AI prompt.")
             return
 
-        status_scope = "private" if is_private else "room"
         self.append_system_message(
-            f"AI request sent ({status_scope}) via {provider}:{model}."
+            f"AI request sent ({scope}) via {provider}:{model} [{request_id}]."
         )
+        self.refresh_output_from_events()
 
         Thread(
             target=self.process_ai_response,
             args=(
+                request_id,
                 provider,
                 provider_cfg["api_key"],
                 model,
@@ -1370,9 +1546,13 @@ class ChatApp:
             ),
             daemon=True,
         ).start()
+        Thread(
+            target=self.run_ai_preview_pulse, args=(request_id,), daemon=True
+        ).start()
 
     def process_ai_response(
         self,
+        request_id: str,
         provider: str,
         api_key: str,
         model: str,
@@ -1380,24 +1560,42 @@ class ChatApp:
         target_room: str,
         is_private: bool,
     ) -> None:
-        try:
-            answer = self.call_ai_provider(
-                provider=provider,
-                api_key=api_key,
-                model=model,
-                prompt=prompt,
-            )
-        except Exception as exc:
-            error_event = self.build_event("system", f"AI request failed: {exc}")
+        answer, error_text = self.run_ai_request_with_retry(
+            request_id=request_id,
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+        )
+        if error_text:
+            error_event = self.build_event("system", error_text)
+            error_event["request_id"] = request_id
             self.write_to_file(error_event, room=target_room)
-            if is_private and not self.is_local_room():
-                self.append_system_message(f"AI request failed in #ai-dm: {exc}")
+            if (
+                is_private
+                and not self.is_local_room()
+                and "cancelled" not in error_text.lower()
+            ):
+                self.append_system_message(f"AI request failed in #ai-dm: {error_text}")
+            self.clear_ai_request_state(request_id)
+            self.refresh_output_from_events()
+            return
+        assert answer is not None
+
+        if self.is_ai_request_cancelled(request_id):
+            canceled_event = self.build_event("system", "AI request cancelled.")
+            canceled_event["request_id"] = request_id
+            self.write_to_file(canceled_event, room=target_room)
+            self.clear_ai_request_state(request_id)
+            self.refresh_output_from_events()
             return
 
         response_event = self.build_event("ai_response", answer)
         response_event["provider"] = provider
         response_event["model"] = model
+        response_event["request_id"] = request_id
         if not self.write_to_file(response_event, room=target_room):
+            self.clear_ai_request_state(request_id)
             self.append_system_message("Error: Failed to persist AI response.")
             return
 
@@ -1405,6 +1603,8 @@ class ChatApp:
             self.append_system_message(
                 "Private AI response saved to #ai-dm. Use /join ai-dm to review."
             )
+        self.clear_ai_request_state(request_id)
+        self.refresh_output_from_events()
 
     def handle_input(self, text: str) -> None:
         text = text.strip()

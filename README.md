@@ -51,6 +51,8 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/aiconfig set-key <provider> <api-key>` - Save provider API key locally.
     *   `/aiconfig set-model <provider> <model>` - Save default model locally.
     *   `/aiconfig set-provider <provider>` - Set default provider locally.
+    *   `/ai status` - Show active local AI request status.
+    *   `/ai cancel` - Request cancellation of active local AI request.
     *   `/share <target-room> <id|start-end>` - Share message(s) from local `ai-dm` into a shared room (IDs are shown as `(n)` in `ai-dm`).
     *   `/setpath [path]` - Change the shared server path.
     *   `/clear` - Clear your local chat history.
