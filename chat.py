@@ -40,6 +40,8 @@ from huddle_chat.constants import (
     CONFIG_FILE,
     DEFAULT_PATH,
     DEFAULT_ROOM,
+    EVENT_ALLOWED_TYPES,
+    EVENT_SCHEMA_VERSION,
     LOCAL_CHAT_ROOT,
     LOCAL_ROOMS_ROOT,
     LOCK_BACKOFF_BASE_SECONDS,
@@ -50,6 +52,9 @@ from huddle_chat.constants import (
     MAX_PRESENCE_ID_LENGTH,
     MEMORY_DIR_NAME,
     MEMORY_GLOBAL_FILE,
+    MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
+    MONITOR_POLL_INTERVAL_MAX_SECONDS,
+    MONITOR_POLL_INTERVAL_MIN_SECONDS,
     PRESENCE_REFRESH_INTERVAL_SECONDS,
     THEMES,
 )
@@ -66,7 +71,51 @@ else:
     portalocker = _portalocker
     _PORTALOCKER_IMPORT_ERROR = None
 
+Observer: Any
+FileSystemEventHandler: Any
+_WATCHDOG_IMPORT_ERROR: ImportError | None
+try:
+    from watchdog.events import (  # type: ignore[import-not-found]
+        FileSystemEventHandler as _FileSystemEventHandler,
+    )
+    from watchdog.observers import Observer as _Observer  # type: ignore[import-not-found]
+except ImportError as exc:
+    Observer = None
+    FileSystemEventHandler = object
+    _WATCHDOG_IMPORT_ERROR = exc
+else:
+    Observer = _Observer
+    FileSystemEventHandler = _FileSystemEventHandler
+    _WATCHDOG_IMPORT_ERROR = None
+
 logger = logging.getLogger(__name__)
+
+
+class MessageFileWatchHandler(FileSystemEventHandler):
+    def __init__(self, app_ref: "ChatApp"):
+        super().__init__()
+        self.app_ref = app_ref
+
+    def _handle_path(self, path: str) -> None:
+        normalized = str(path).replace("\\", "/").lower()
+        if normalized.endswith("/messages.jsonl"):
+            self.app_ref.signal_monitor_refresh()
+
+    def on_created(self, event) -> None:
+        if getattr(event, "is_directory", False):
+            return
+        self._handle_path(getattr(event, "src_path", ""))
+
+    def on_modified(self, event) -> None:
+        if getattr(event, "is_directory", False):
+            return
+        self._handle_path(getattr(event, "src_path", ""))
+
+    def on_moved(self, event) -> None:
+        if getattr(event, "is_directory", False):
+            return
+        self._handle_path(getattr(event, "src_path", ""))
+        self._handle_path(getattr(event, "dest_path", ""))
 
 
 class ChatApp:
@@ -88,6 +137,10 @@ class ChatApp:
         self.search_query = ""
         self.search_hits: list[int] = []
         self.active_search_hit_idx = -1
+        self.monitor_refresh_event = Event()
+        self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_ACTIVE_SECONDS
+        self.monitor_idle_cycles = 0
+        self.file_observer = None
         self.ai_state_lock = Lock()
         self.ai_active_request_id: str | None = None
         self.ai_active_started_at = 0.0
@@ -819,6 +872,7 @@ class ChatApp:
 
     def build_event(self, event_type: str, text: str) -> dict[str, Any]:
         return {
+            "v": EVENT_SCHEMA_VERSION,
             "ts": datetime.now().isoformat(timespec="seconds"),
             "type": event_type,
             "author": self.name,
@@ -845,6 +899,76 @@ class ChatApp:
             return f"[{ts}] AI[{provider}{model_suffix}]: {text}"
         return f"[{ts}] {author}: {text}"
 
+    def ensure_monitor_state_initialized(self) -> None:
+        if not hasattr(self, "monitor_refresh_event"):
+            self.monitor_refresh_event = Event()
+            self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_ACTIVE_SECONDS
+            self.monitor_idle_cycles = 0
+            self.file_observer = None
+
+    def signal_monitor_refresh(self) -> None:
+        self.ensure_monitor_state_initialized()
+        self.monitor_refresh_event.set()
+
+    def start_file_watcher(self) -> None:
+        self.ensure_monitor_state_initialized()
+        if Observer is None or self.file_observer is not None:
+            return
+
+        watch_paths = {str(Path(self.rooms_root).resolve())}
+        try:
+            watch_paths.add(str(self.get_local_rooms_root().resolve()))
+        except Exception:
+            pass
+
+        try:
+            observer = Observer()
+            handler = MessageFileWatchHandler(self)
+            for watch_path in sorted(watch_paths):
+                if os.path.isdir(watch_path):
+                    observer.schedule(handler, watch_path, recursive=True)
+            observer.daemon = True
+            observer.start()
+            self.file_observer = observer
+        except Exception as exc:
+            logger.warning("File watcher unavailable, falling back to polling: %s", exc)
+            self.file_observer = None
+
+    def stop_file_watcher(self) -> None:
+        self.ensure_monitor_state_initialized()
+        observer = self.file_observer
+        if observer is None:
+            return
+        try:
+            observer.stop()
+            observer.join(timeout=1.5)
+        except Exception as exc:
+            logger.warning("Failed stopping file watcher cleanly: %s", exc)
+        self.file_observer = None
+
+    def read_recent_lines(self, path: Path, max_lines: int) -> list[str]:
+        if max_lines <= 0:
+            return []
+        if not path.exists():
+            return []
+
+        raw_lines: list[bytes] = []
+        chunk_size = 8192
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            position = f.tell()
+            buffer = b""
+
+            while position > 0 and len(raw_lines) <= max_lines:
+                read_size = min(chunk_size, position)
+                position -= read_size
+                f.seek(position)
+                buffer = f.read(read_size) + buffer
+                raw_lines = buffer.splitlines()
+
+            decoded = [row.decode("utf-8", errors="replace") for row in raw_lines]
+            return decoded[-max_lines:]
+
     def parse_event_line(self, line: str) -> dict[str, Any] | None:
         line = line.strip()
         if not line:
@@ -856,10 +980,35 @@ class ChatApp:
             return None
         if not isinstance(data, dict):
             return None
-        if "type" not in data or "author" not in data or "text" not in data:
+
+        event_type = str(data.get("type", "")).strip().lower()
+        if event_type not in EVENT_ALLOWED_TYPES:
+            logger.warning("Invalid event type '%s' ignored.", event_type)
             return None
+        author = data.get("author")
+        text = data.get("text")
+        if not isinstance(author, str) or not isinstance(text, str):
+            logger.warning(
+                "Invalid event payload ignored (author/text must be string)."
+            )
+            return None
+        if "v" in data:
+            version = data.get("v")
+            if not isinstance(version, int):
+                logger.warning("Invalid event schema version ignored.")
+                return None
+            if version > EVENT_SCHEMA_VERSION:
+                logger.warning("Future event schema version %s ignored.", version)
+                return None
+        else:
+            data["v"] = EVENT_SCHEMA_VERSION
         if "ts" not in data:
             data["ts"] = datetime.now().isoformat(timespec="seconds")
+        if not isinstance(data.get("ts"), str):
+            data["ts"] = str(data.get("ts"))
+        data["type"] = event_type
+        data["author"] = author
+        data["text"] = text
         return data
 
     def append_local_event(self, event: dict[str, Any]) -> None:
@@ -1046,6 +1195,7 @@ class ChatApp:
         self.load_recent_messages()
         self.refresh_presence_sidebar()
         self.save_config()
+        self.signal_monitor_refresh()
         self.append_system_message(f"Joined room #{room}.")
 
     def load_recent_messages(self) -> None:
@@ -1057,12 +1207,11 @@ class ChatApp:
 
         loaded_events: list[dict[str, Any]] = []
         try:
-            with open(message_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    event = self.parse_event_line(line)
-                    if event is not None:
-                        loaded_events.append(event)
-                self.last_pos_by_room[self.current_room] = f.tell()
+            for line in self.read_recent_lines(message_file, MAX_MESSAGES * 2):
+                event = self.parse_event_line(line)
+                if event is not None:
+                    loaded_events.append(event)
+            self.last_pos_by_room[self.current_room] = message_file.stat().st_size
         except OSError as exc:
             logger.warning(
                 "Failed loading history for room %s: %s", self.current_room, exc
@@ -2016,6 +2165,7 @@ class ChatApp:
                     f.write(row + "\n")
                     f.flush()
                     os.fsync(f.fileno())
+                self.signal_monitor_refresh()
                 return True
             except portalocker.exceptions.LockException:
                 pass
@@ -2054,6 +2204,7 @@ class ChatApp:
             logger.warning("Failed forced heartbeat update: %s", exc)
 
     async def monitor_messages(self) -> None:
+        self.ensure_monitor_state_initialized()
         next_presence_refresh = 0.0
         while self.running:
             now = time.monotonic()
@@ -2064,6 +2215,7 @@ class ChatApp:
             room = self.current_room
             message_file = self.get_message_file(room)
             self.last_pos_by_room.setdefault(room, 0)
+            had_new_messages = False
 
             if message_file.exists():
                 try:
@@ -2081,6 +2233,7 @@ class ChatApp:
                         f.seek(last_pos)
                         new_lines = f.readlines()
                         if new_lines and room == self.current_room:
+                            had_new_messages = True
                             for line in new_lines:
                                 event = self.parse_event_line(line)
                                 if event is None:
@@ -2098,7 +2251,26 @@ class ChatApp:
                         message_file,
                         exc,
                     )
-            await asyncio.sleep(0.5)
+            if had_new_messages:
+                self.monitor_idle_cycles = 0
+                self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_MIN_SECONDS
+            else:
+                self.monitor_idle_cycles = min(self.monitor_idle_cycles + 1, 20)
+                if self.monitor_idle_cycles >= 4:
+                    self.monitor_poll_interval_seconds = min(
+                        MONITOR_POLL_INTERVAL_MAX_SECONDS,
+                        self.monitor_poll_interval_seconds + 0.1,
+                    )
+                else:
+                    self.monitor_poll_interval_seconds = (
+                        MONITOR_POLL_INTERVAL_ACTIVE_SECONDS
+                    )
+
+            if self.monitor_refresh_event.is_set():
+                self.monitor_refresh_event.clear()
+                self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_MIN_SECONDS
+
+            await asyncio.sleep(self.monitor_poll_interval_seconds)
 
     def run(self) -> None:
         print(f"Connecting to: {self.base_dir}")
@@ -2128,6 +2300,7 @@ class ChatApp:
 
         self.load_recent_messages()
 
+        self.start_file_watcher()
         Thread(target=self.heartbeat, daemon=True).start()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -2141,6 +2314,7 @@ class ChatApp:
             pass
         finally:
             self.running = False
+            self.stop_file_watcher()
 
 
 if __name__ == "__main__":

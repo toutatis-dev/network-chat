@@ -157,3 +157,25 @@ def test_message_flow_and_room_isolation(tmp_path, monkeypatch):
     assert len(dev_rows) == 1
     assert "hello general" in general_rows[0]
     assert "hello dev" in dev_rows[0]
+
+
+def test_load_recent_messages_uses_tail_for_large_history(tmp_path):
+    app = build_runtime_app(tmp_path)
+    path = app.get_message_file("general")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for i in range(chat.MAX_MESSAGES + 25):
+            row = {
+                "v": 1,
+                "ts": f"2026-01-01T00:00:{i % 60:02d}",
+                "type": "chat",
+                "author": "RuntimeUser",
+                "text": f"line-{i}",
+            }
+            f.write(json.dumps(row) + "\n")
+
+    app.load_recent_messages()
+
+    assert len(app.message_events) == chat.MAX_MESSAGES
+    assert app.message_events[0]["text"] == "line-25"
+    assert app.message_events[-1]["text"] == f"line-{chat.MAX_MESSAGES + 24}"

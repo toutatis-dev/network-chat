@@ -269,3 +269,17 @@ def test_aiconfig_provider_first_completion_suggests_set_actions(app_instance):
     texts = [c.text for c in completions]
     assert "set-key" in texts
     assert "set-model" in texts
+
+
+def test_parse_event_line_rejects_unknown_event_type(app_instance):
+    event = app_instance.parse_event_line(
+        '{"v":1,"ts":"2026-01-01T00:00:00","type":"mystery","author":"a","text":"b"}'
+    )
+    assert event is None
+
+
+def test_parse_event_line_rejects_non_string_fields(app_instance):
+    event = app_instance.parse_event_line(
+        '{"v":1,"ts":"2026-01-01T00:00:00","type":"chat","author":123,"text":false}'
+    )
+    assert event is None
