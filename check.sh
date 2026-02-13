@@ -8,7 +8,7 @@ venv/bin/black $TARGETS
 
 echo -e "
 --- 2. Linting (Flake8) ---"
-venv/bin/flake8 $TARGETS --ignore=E501,E203 --jobs=1
+venv/bin/flake8 $TARGETS --ignore=E501,E203,W503 --jobs=1
 
 echo -e "
 --- 3. Type Checking (Mypy) ---"

@@ -10,7 +10,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 2. Linting (Flake8) ---
-%PYTHON% -m flake8 %TARGETS% --ignore=E501,E203 --jobs=1
+%PYTHON% -m flake8 %TARGETS% --ignore=E501,E203,W503 --jobs=1
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Linting failed.
     exit /b 1
