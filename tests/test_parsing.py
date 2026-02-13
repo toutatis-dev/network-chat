@@ -18,8 +18,8 @@ def app_instance():
                     app = chat.ChatApp()
                     app.name = "TestUser"
                     app.chat_file = "/tmp/Shared_chat.txt"
-                    # Mock the write method to capture output
-                    app.write_to_file = MagicMock()
+                    # Mock the write method to capture output and return Success (True) by default
+                    app.write_to_file = MagicMock(return_value=True)
                     app.input_field = MagicMock()
                     app.output_field = MagicMock()
                     app.application = MagicMock()
@@ -54,22 +54,13 @@ def test_command_me(app_instance):
 
 def test_command_theme_unknown(app_instance):
     """Test handling an unknown theme command."""
-    # Setup the mock to return a string so += works logically or at least we can check assignment
-    # But simpler: just check if the attribute was set
     app_instance.handle_input("/theme nonexist")
     
     assert not app_instance.write_to_file.called
     
     # Check if 'text' attribute was set on the output_field mock
-    # When doing mock.text += "foo", it effectively does mock.text = mock.text + "foo"
-    # So we check the last assignment to the 'text' attribute
-    # However, MagicMock properties are tricky. 
-    # Let's check if the code attempted to access the buffer (which happens right after error print)
-    # self.output_field.buffer.cursor_position = ...
     assert app_instance.output_field.buffer.cursor_position is not None
     
-    # And we can check that save_config was NOT called (unlike a successful theme change)
-    # We need to mock save_config on the instance to check this
     with patch.object(app_instance, 'save_config') as mock_save:
         app_instance.handle_input("/theme nonexist")
         assert not mock_save.called
@@ -84,3 +75,16 @@ def test_command_clear(app_instance):
     
     assert app_instance.messages == []
     assert app_instance.output_field.text == ""
+
+def test_handle_write_failure(app_instance):
+    """Test that input is NOT cleared if write fails."""
+    # Simulate write failure
+    app_instance.write_to_file.return_value = False
+    
+    app_instance.handle_input("Important Message")
+    
+    # Verify write was attempted
+    assert app_instance.write_to_file.called
+    
+    # Verify we printed the specific error message to local output
+    assert app_instance.output_field.buffer.cursor_position is not None

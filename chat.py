@@ -360,30 +360,61 @@ class ChatApp:
                 return
             if command == '/me':
                 timestamp = datetime.now().strftime("%H:%M:%S")
-                self.write_to_file(f"[{timestamp}] * {self.name} {args}\n")
-                self.input_field.text = ""
+                if self.write_to_file(f"[{timestamp}] * {self.name} {args}\n"):
+                    self.input_field.text = ""
+                else:
+                    self.output_field.text += "\n[System] Error: Could not send message. Network busy or locked.\n"
+                    self.output_field.buffer.cursor_position = len(self.output_field.text)
                 return
 
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.write_to_file(f"[{timestamp}] {self.name}: {text}\n")
-        self.input_field.text = ""
+        if self.write_to_file(f"[{timestamp}] {self.name}: {text}\n"):
+            self.input_field.text = ""
+        else:
+            self.output_field.text += "\n[System] Error: Could not send message. Network busy or locked.\n"
+            self.output_field.buffer.cursor_position = len(self.output_field.text)
 
     def write_to_file(self, msg):
         lock_file = self.chat_file + ".lock"
-        try:
-            retries = 5
-            while retries > 0:
+        acquired = False
+        retries = 10
+        
+        while retries > 0:
+            try:
+                # 1. Try to create lock file (atomic operation)
+                with open(lock_file, "x") as _: pass
+                acquired = True
+                break
+            except FileExistsError:
+                # 2. Check for stale lock
                 try:
-                    with open(lock_file, "x") as _: pass
-                    break
-                except:
-                    time.sleep(0.05)
-                    retries -= 1
+                    # If lock is older than 5 seconds, assume crash and steal it
+                    if time.time() - os.path.getmtime(lock_file) > 5:
+                        os.remove(lock_file)
+                        continue # Retry immediately
+                except: pass # File might have been deleted by owner concurrently
+                
+                time.sleep(0.1)
+                retries -= 1
+            except Exception:
+                # Permission error or other FS issue
+                time.sleep(0.1)
+                retries -= 1
+        
+        if not acquired:
+            return False
+
+        try:
             with open(self.chat_file, "a") as f:
                 f.write(msg)
-            if os.path.exists(lock_file): os.remove(lock_file)
+            return True
         except:
-            if os.path.exists(lock_file): os.remove(lock_file)
+            return False
+        finally:
+            # Only delete if we acquired it
+            if acquired and os.path.exists(lock_file):
+                try: os.remove(lock_file)
+                except: pass
 
     def force_heartbeat(self):
         try:
