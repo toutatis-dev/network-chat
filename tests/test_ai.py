@@ -75,6 +75,14 @@ def test_parse_ai_args_accepts_no_memory_flag():
     assert parsed["prompt"] == "summarize this"
 
 
+def test_parse_ai_args_accepts_act_flag():
+    app = chat.ChatApp.__new__(chat.ChatApp)
+    parsed, error = app.parse_ai_args("--act summarize this")
+    assert error is None
+    assert parsed["action_mode"] is True
+    assert parsed["prompt"] == "summarize this"
+
+
 def test_aiconfig_set_key_updates_local_config(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}

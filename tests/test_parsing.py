@@ -284,3 +284,16 @@ def test_parse_event_line_rejects_non_string_fields(app_instance):
         '{"v":1,"ts":"2026-01-01T00:00:00","type":"chat","author":123,"text":false}'
     )
     assert event is None
+
+
+def test_toolpaths_add_list_remove(app_instance, tmp_path):
+    app_instance.save_config = MagicMock()
+    target = str(tmp_path.resolve())
+    app_instance.handle_input(f'/toolpaths add "{target}"')
+    assert "Added tool path" in app_instance.output_field.text
+
+    app_instance.handle_input("/toolpaths list")
+    assert target in app_instance.output_field.text
+
+    app_instance.handle_input(f'/toolpaths remove "{target}"')
+    assert "Removed tool path" in app_instance.output_field.text
