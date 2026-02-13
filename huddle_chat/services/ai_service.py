@@ -177,6 +177,15 @@ class AIService:
             except Exception as retry_exc:
                 return None, f"AI request failed after retry: {retry_exc}"
 
+    def create_thread(self, target, args):
+        try:
+            import chat
+
+            thread_class = getattr(chat, "Thread", Thread)
+        except Exception:
+            thread_class = Thread
+        return thread_class(target=target, args=args, daemon=True)
+
     def handle_ai_command(self, args: str) -> None:
         lowered = args.strip().lower()
         if lowered == "status":
@@ -249,7 +258,7 @@ class AIService:
         )
         self.app.refresh_output_from_events()
 
-        Thread(
+        self.create_thread(
             target=self.process_ai_response,
             args=(
                 request_id,
@@ -262,10 +271,9 @@ class AIService:
                 disable_memory,
                 memory_scopes,
             ),
-            daemon=True,
         ).start()
-        Thread(
-            target=self.app.run_ai_preview_pulse, args=(request_id,), daemon=True
+        self.create_thread(
+            target=self.app.run_ai_preview_pulse, args=(request_id,)
         ).start()
 
     def process_ai_response(
