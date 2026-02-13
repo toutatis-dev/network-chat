@@ -1,6 +1,7 @@
 @echo off
+set TARGETS=chat.py tests\*.py
 echo --- 1. Formatting (Black) ---
-venv\Scripts\black .
+venv\Scripts\black %TARGETS%
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Formatting failed.
     exit /b 1
@@ -8,7 +9,7 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 2. Linting (Flake8) ---
-venv\Scripts\flake8 chat.py --ignore=E501
+venv\Scripts\flake8 %TARGETS% --ignore=E501
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Linting failed.
     exit /b 1

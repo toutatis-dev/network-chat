@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import chat
-from datetime import datetime
 
 
 @pytest.fixture
@@ -10,29 +9,30 @@ def app_instance():
     with patch("chat.ChatApp.load_config_data", return_value={}):
         with patch("chat.ChatApp.ensure_paths"):
             with patch("chat.ChatApp.prompt_for_path", return_value="/tmp"):
-                # We need to mock TUI components since __init__ creates them
-                with (
-                    patch("chat.TextArea"),
-                    patch("chat.FormattedTextControl"),
-                    patch("chat.Window"),
-                    patch("chat.Application"),
-                    patch("chat.KeyBindings"),
-                    patch("chat.HSplit"),
-                    patch("chat.VSplit"),
-                    patch("chat.Frame"),
-                    patch("chat.FloatContainer"),
-                    patch("chat.Layout"),
-                ):
+                with patch("chat.ChatApp.ensure_locking_dependency"):
+                    # We need to mock TUI components since __init__ creates them
+                    with (
+                        patch("chat.TextArea"),
+                        patch("chat.FormattedTextControl"),
+                        patch("chat.Window"),
+                        patch("chat.Application"),
+                        patch("chat.KeyBindings"),
+                        patch("chat.HSplit"),
+                        patch("chat.VSplit"),
+                        patch("chat.Frame"),
+                        patch("chat.FloatContainer"),
+                        patch("chat.Layout"),
+                    ):
 
-                    app = chat.ChatApp()
-                    app.name = "TestUser"
-                    app.chat_file = "/tmp/Shared_chat.txt"
-                    # Mock the write method to capture output and return Success (True) by default
-                    app.write_to_file = MagicMock(return_value=True)
-                    app.input_field = MagicMock()
-                    app.output_field = MagicMock()
-                    app.application = MagicMock()
-                    return app
+                        app = chat.ChatApp()
+                        app.name = "TestUser"
+                        app.chat_file = "/tmp/Shared_chat.txt"
+                        # Mock the write method to capture output and return Success (True) by default
+                        app.write_to_file = MagicMock(return_value=True)
+                        app.input_field = MagicMock()
+                        app.output_field = MagicMock()
+                        app.application = MagicMock()
+                        return app
 
 
 def test_handle_normal_message(app_instance):

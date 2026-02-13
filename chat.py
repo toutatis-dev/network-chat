@@ -3,6 +3,7 @@ import time
 import json
 import asyncio
 import string
+import random
 from typing import Any
 from datetime import datetime
 from threading import Thread
@@ -25,9 +26,24 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.layout.menus import CompletionsMenu
 
+portalocker: Any
+_PORTALOCKER_IMPORT_ERROR: ImportError | None
+try:
+    import portalocker as _portalocker  # type: ignore[import-not-found]
+except ImportError as exc:  # pragma: no cover - tested via startup guard
+    portalocker = None
+    _PORTALOCKER_IMPORT_ERROR = exc
+else:
+    portalocker = _portalocker
+    _PORTALOCKER_IMPORT_ERROR = None
+
 # Global Configuration
 CONFIG_FILE = "chat_config.json"
 DEFAULT_PATH = None
+LOCK_TIMEOUT_SECONDS = 2.0
+LOCK_MAX_ATTEMPTS = 20
+LOCK_BACKOFF_BASE_SECONDS = 0.05
+LOCK_BACKOFF_MAX_SECONDS = 0.5
 
 # Themes Configuration
 THEMES = {
@@ -153,6 +169,7 @@ class ChatLexer(Lexer):
 
 class ChatApp:
     def __init__(self):
+        self.ensure_locking_dependency()
         self.name = "Anonymous"
         self.color = "white"
         self.status = ""
@@ -235,6 +252,18 @@ class ChatApp:
             style=self.get_style(),
             full_screen=True,
             mouse_support=True,
+        )
+
+    def ensure_locking_dependency(self) -> None:
+        if portalocker is not None:
+            return
+
+        detail = ""
+        if _PORTALOCKER_IMPORT_ERROR is not None:
+            detail = f" Original error: {_PORTALOCKER_IMPORT_ERROR}."
+        raise SystemExit(
+            "Missing dependency 'portalocker'. "
+            "Install dependencies with 'pip install -r requirements.txt'." + detail
         )
 
     def load_config_data(self) -> dict[str, Any]:
@@ -467,50 +496,38 @@ class ChatApp:
             self.output_field.buffer.cursor_position = len(self.output_field.text)
 
     def write_to_file(self, msg: str) -> bool:
-        lock_file = self.chat_file + ".lock"
-        acquired = False
-        retries = 10
+        self.ensure_locking_dependency()
+        assert portalocker is not None
 
-        while retries > 0:
+        for attempt in range(LOCK_MAX_ATTEMPTS):
             try:
-                # 1. Try to create lock file (atomic operation)
-                with open(lock_file, "x") as _:
-                    pass
-                acquired = True
-                break
-            except FileExistsError:
-                # 2. Check for stale lock
-                try:
-                    # If lock is older than 5 seconds, assume crash and steal it
-                    if time.time() - os.path.getmtime(lock_file) > 5:
-                        os.remove(lock_file)
-                        continue  # Retry immediately
-                except Exception:
-                    pass  # File might have been deleted by owner concurrently
-
-                time.sleep(0.1)
-                retries -= 1
+                with portalocker.Lock(
+                    self.chat_file,
+                    mode="a",
+                    timeout=LOCK_TIMEOUT_SECONDS,
+                    fail_when_locked=True,
+                    encoding="utf-8",
+                ) as f:
+                    f.write(msg)
+                    f.flush()
+                    os.fsync(f.fileno())
+                return True
+            except portalocker.exceptions.LockException:
+                pass
+            except OSError:
+                pass
             except Exception:
-                # Permission error or other FS issue
-                time.sleep(0.1)
-                retries -= 1
+                return False
 
-        if not acquired:
-            return False
+            if attempt == LOCK_MAX_ATTEMPTS - 1:
+                break
+            delay = min(
+                LOCK_BACKOFF_MAX_SECONDS,
+                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
+            )
+            time.sleep(delay + random.uniform(0, 0.03))
 
-        try:
-            with open(self.chat_file, "a") as f:
-                f.write(msg)
-            return True
-        except Exception:
-            return False
-        finally:
-            # Only delete if we acquired it
-            if acquired and os.path.exists(lock_file):
-                try:
-                    os.remove(lock_file)
-                except Exception:
-                    pass
+        return False
 
     def force_heartbeat(self) -> None:
         try:

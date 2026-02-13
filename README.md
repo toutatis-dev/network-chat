@@ -11,6 +11,7 @@ A lightweight, serverless chat application designed for local networks. It uses 
 *   **Real-time Presence:** See who is online in the sidebar.
 *   **Themes:** Switch between multiple color themes (Default, Nord, Matrix, Solarized, Monokai).
 *   **Persistent Identity:** Remembers your username and settings.
+*   **Cross-Platform File Locking:** Uses robust write locking for shared chat files on Windows and Linux.
 
 ## Quick Start (Windows)
 
