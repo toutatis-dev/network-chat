@@ -664,10 +664,12 @@ class ChatApp:
         for style, text in tokens:
             start = 0
             for match in pattern.finditer(text):
+                match_start = match.start()
+                match_end = match.end()
                 if match.start() > start:
-                    result.append((style, text[start : match.start()]))
-                result.append(("class:search-match", text[match.start() : match.end()]))
-                start = match.end()
+                    result.append((style, text[start:match_start]))
+                result.append(("class:search-match", text[match_start:match_end]))
+                start = match_end
             if start < len(text):
                 result.append((style, text[start:]))
         return result
@@ -680,10 +682,12 @@ class ChatApp:
         result: list[tuple[str, str]] = []
         start = 0
         for match in mention_regex.finditer(text):
+            match_start = match.start()
+            match_end = match.end()
             if match.start() > start:
-                result.append((style, text[start : match.start()]))
-            result.append(("class:mention", text[match.start() : match.end()]))
-            start = match.end()
+                result.append((style, text[start:match_start]))
+            result.append(("class:mention", text[match_start:match_end]))
+            start = match_end
         if start < len(text):
             result.append((style, text[start:]))
         return result
