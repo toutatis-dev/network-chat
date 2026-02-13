@@ -23,7 +23,6 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.styles import Style
-from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.layout.menus import CompletionsMenu
@@ -432,18 +431,30 @@ class ChatApp:
                 pass
 
     def update_sidebar(self) -> None:
-        lines = []
+        fragments: list[tuple[str, str]] = []
         users = sorted(self.online_users.keys())
-        for user in users:
+        for idx, user in enumerate(users):
             data = self.online_users[user]
-            color = data.get("color", "white")
-            status = data.get("status", "")
-            line = f'<style fg="{color}">● {user}</style>'
+            color = self.sanitize_sidebar_color(data.get("color", "white"))
+            display_name = self.sanitize_sidebar_text(user, 64)
+            status = self.sanitize_sidebar_text(data.get("status", ""), 80)
+            fragments.append((f"fg:{color}", f"● {display_name}"))
             if status:
-                line += f' <style fg="#888888">[{status}]</style>'
-            lines.append(line)
-        self.sidebar_control.text = HTML("\n".join(lines))
+                fragments.append(("fg:#888888", f" [{status}]"))
+            if idx < len(users) - 1:
+                fragments.append(("", "\n"))
+        self.sidebar_control.text = fragments
         self.application.invalidate()
+
+    def sanitize_sidebar_text(self, value: Any, max_len: int) -> str:
+        text = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        return text[:max_len]
+
+    def sanitize_sidebar_color(self, value: Any) -> str:
+        color = str(value).strip().lower()
+        if color in COLORS:
+            return color
+        return "white"
 
     def handle_input(self, text: str) -> None:
         text = text.strip()

@@ -103,3 +103,33 @@ def test_handle_write_failure(app_instance):
 
     # Verify we printed the specific error message to local output
     assert app_instance.output_field.buffer.cursor_position is not None
+
+
+def test_sidebar_text_sanitization_removes_control_chars(app_instance):
+    app_instance.online_users = {
+        'eve<style fg="red">x</style>': {
+            "color": "green",
+            "status": "busy\n<script>",
+        }
+    }
+    app_instance.sidebar_control = MagicMock()
+
+    app_instance.update_sidebar()
+
+    fragments = app_instance.sidebar_control.text
+    assert isinstance(fragments, list)
+    rendered = "".join(text for _, text in fragments)
+    assert "\n" not in rendered
+    assert "\r" not in rendered
+    assert "\t" not in rendered
+    assert 'eve<style fg="red">x</style>' in rendered
+
+
+def test_sidebar_color_sanitization_falls_back_to_white(app_instance):
+    app_instance.online_users = {"alice": {"color": "bad-color", "status": ""}}
+    app_instance.sidebar_control = MagicMock()
+
+    app_instance.update_sidebar()
+
+    fragments = app_instance.sidebar_control.text
+    assert fragments[0][0] == "fg:white"
