@@ -27,7 +27,7 @@ A lightweight, serverless chat application designed for local networks. It uses 
 
 3.  **Setup:**
     *   On the first launch, you will be asked for the **Server Path**.
-    *   Enter the UNC path to your shared folder (e.g., `\fileserver\Share\Chat`).
+    *   Enter the UNC path to your shared folder (e.g., `\\fileserver\Share\Chat`).
     *   Enter your desired username.
 
 ## Usage
@@ -48,13 +48,25 @@ A lightweight, serverless chat application designed for local networks. It uses 
 
 ## Development
 
-This project uses `pytest` for testing. To run tests manually:
+This project uses a comprehensive suite of quality checks to maintain code resilience and professionalism.
 
-1.  Activate the virtual environment:
+### Quality Checks
+*   **Black**: Automatic code formatting.
+*   **Flake8**: Linting for syntax and style issues.
+*   **Mypy**: Static type checking to catch logic errors.
+*   **Pytest**: Unit testing for core functionality.
+
+### Running Checks
+You should run the unified check script before committing any changes to ensure everything is in order.
+
+*   **Windows:**
     ```cmd
-    venv\Scripts\activate
+    check.bat
     ```
-2.  Run tests:
-    ```cmd
-    pytest
+*   **Linux/macOS:**
+    ```bash
+    ./check.sh
     ```
+
+### Continuous Integration
+All pushes and pull requests are automatically verified via **GitHub Actions** on Ubuntu using Python 3.13.
