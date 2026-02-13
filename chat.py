@@ -1215,6 +1215,7 @@ class ChatApp:
         self.application.invalidate()
 
     def get_ai_preview_line(self) -> str:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if not self.ai_active_request_id:
                 return ""
@@ -1228,6 +1229,19 @@ class ChatApp:
             if self.ai_preview_text:
                 return f"{base} {self.ai_preview_text}"
             return base
+
+    def ensure_ai_state_initialized(self) -> None:
+        if not hasattr(self, "ai_state_lock"):
+            self.ai_state_lock = Lock()
+            self.ai_active_request_id = None
+            self.ai_active_started_at = 0.0
+            self.ai_active_provider = ""
+            self.ai_active_model = ""
+            self.ai_active_scope = ""
+            self.ai_active_room = ""
+            self.ai_retry_count = 0
+            self.ai_preview_text = ""
+            self.ai_cancel_event = Event()
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1507,6 +1521,7 @@ class ChatApp:
     def start_ai_request_state(
         self, provider: str, model: str, target_room: str, scope: str
     ) -> str | None:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id is not None:
                 return None
@@ -1523,6 +1538,7 @@ class ChatApp:
             return request_id
 
     def clear_ai_request_state(self, request_id: str) -> None:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id != request_id:
                 return
@@ -1537,10 +1553,12 @@ class ChatApp:
             self.ai_cancel_event = Event()
 
     def is_ai_request_active(self) -> bool:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             return self.ai_active_request_id is not None
 
     def set_ai_preview_text(self, request_id: str, text: str) -> None:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id != request_id:
                 return
@@ -1548,12 +1566,14 @@ class ChatApp:
         self.refresh_output_from_events()
 
     def is_ai_request_cancelled(self, request_id: str) -> bool:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id != request_id:
                 return True
             return self.ai_cancel_event.is_set()
 
     def request_ai_cancel(self) -> bool:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id is None:
                 return False
@@ -1562,6 +1582,7 @@ class ChatApp:
             return True
 
     def build_ai_status_text(self) -> str:
+        self.ensure_ai_state_initialized()
         with self.ai_state_lock:
             if self.ai_active_request_id is None:
                 return "No active AI request."
@@ -1575,6 +1596,7 @@ class ChatApp:
             )
 
     def run_ai_preview_pulse(self, request_id: str) -> None:
+        self.ensure_ai_state_initialized()
         while True:
             with self.ai_state_lock:
                 if self.ai_active_request_id != request_id:
@@ -1585,6 +1607,7 @@ class ChatApp:
     def run_ai_request_with_retry(
         self, request_id: str, provider: str, api_key: str, model: str, prompt: str
     ) -> tuple[str | None, str | None]:
+        self.ensure_ai_state_initialized()
         try:
             answer = self.call_ai_provider(
                 provider=provider,
