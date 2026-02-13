@@ -3,11 +3,9 @@ import time
 import json
 import asyncio
 import string
-import random
 import re
 import logging
 import shlex
-import difflib
 from typing import Any
 from datetime import datetime
 from threading import Event, Lock, Thread
@@ -35,34 +33,26 @@ from huddle_chat.constants import (
     AI_CONFIG_FILE,
     AI_DM_ROOM,
     AI_HTTP_TIMEOUT_SECONDS,
-    AI_MEMORY_CONTEXT_CHAR_BUDGET,
-    AI_MEMORY_FINAL_LIMIT,
-    AI_MEMORY_PREFILTER_LIMIT,
-    AI_MEMORY_SUMMARY_CHAR_LIMIT,
-    AI_RETRY_BACKOFF_SECONDS,
     CLIENT_ID_LENGTH,
     COLORS,
     CONFIG_FILE,
     DEFAULT_PATH,
     DEFAULT_ROOM,
-    EVENT_ALLOWED_TYPES,
     EVENT_SCHEMA_VERSION,
     LOCAL_CHAT_ROOT,
     LOCAL_ROOMS_ROOT,
-    LOCK_BACKOFF_BASE_SECONDS,
-    LOCK_BACKOFF_MAX_SECONDS,
-    LOCK_MAX_ATTEMPTS,
-    LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
-    MEMORY_DUPLICATE_THRESHOLD,
     MEMORY_DIR_NAME,
     MEMORY_GLOBAL_FILE,
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
-    MONITOR_POLL_INTERVAL_MAX_SECONDS,
-    MONITOR_POLL_INTERVAL_MIN_SECONDS,
-    PRESENCE_REFRESH_INTERVAL_SECONDS,
     THEMES,
+)
+from huddle_chat.services import (
+    AIService,
+    MemoryService,
+    RuntimeService,
+    StorageService,
 )
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
@@ -160,6 +150,10 @@ class ChatApp:
         self.memory_draft_active = False
         self.memory_draft_mode = "none"
         self.memory_draft: dict[str, Any] | None = None
+        self.storage_service = StorageService(self)
+        self.memory_service = MemoryService(self)
+        self.ai_service = AIService(self)
+        self.runtime_service = RuntimeService(self)
 
         # Load Config
         config_data = self.load_config_data()
@@ -434,81 +428,16 @@ class ChatApp:
             logger.warning("Failed saving AI config: %s", exc)
 
     def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
-        try:
-            tokens = shlex.split(arg_text)
-        except ValueError:
-            return {}, "Invalid /ai arguments. Check quotes and try again."
-
-        provider_override: str | None = None
-        model_override: str | None = None
-        is_private = False
-        disable_memory = False
-        prompt_parts: list[str] = []
-        i = 0
-        while i < len(tokens):
-            token = tokens[i]
-            if token == "--provider":
-                if i + 1 >= len(tokens):
-                    return {}, "Usage: /ai --provider <gemini|openai> <prompt>"
-                provider_override = tokens[i + 1].strip().lower()
-                i += 2
-                continue
-            if token == "--model":
-                if i + 1 >= len(tokens):
-                    return {}, "Usage: /ai --model <model-name> <prompt>"
-                model_override = tokens[i + 1].strip()
-                i += 2
-                continue
-            if token == "--private":
-                is_private = True
-                i += 1
-                continue
-            if token == "--no-memory":
-                disable_memory = True
-                i += 1
-                continue
-            prompt_parts.append(token)
-            i += 1
-
-        prompt = " ".join(prompt_parts).strip()
-        if not prompt:
-            return (
-                {},
-                "Usage: /ai [--provider <name>] [--model <name>] [--private] [--no-memory] <prompt>",
-            )
-
-        return {
-            "provider_override": provider_override,
-            "model_override": model_override,
-            "is_private": is_private,
-            "disable_memory": disable_memory,
-            "prompt": prompt,
-        }, None
+        self.ensure_services_initialized()
+        return self.ai_service.parse_ai_args(arg_text)
 
     def resolve_ai_provider_config(
         self, provider_override: str | None, model_override: str | None
     ) -> tuple[dict[str, str], str | None]:
-        providers = self.ai_config.get("providers", {})
-        default_provider = str(self.ai_config.get("default_provider", "gemini")).lower()
-        provider = provider_override or default_provider
-        if provider not in ("gemini", "openai"):
-            return {}, f"Unknown provider '{provider}'. Use /aiproviders."
-        provider_data = providers.get(provider, {})
-        if not isinstance(provider_data, dict):
-            provider_data = {}
-        api_key = str(provider_data.get("api_key", "")).strip()
-        model = str(model_override or provider_data.get("model", "")).strip()
-        if not api_key:
-            return (
-                {},
-                f"Provider '{provider}' is missing API key. Run /aiconfig set-key {provider} <API_KEY>.",
-            )
-        if not model:
-            return (
-                {},
-                f"Provider '{provider}' is missing model. Run /aiconfig set-model {provider} <model>.",
-            )
-        return {"provider": provider, "api_key": api_key, "model": model}, None
+        self.ensure_services_initialized()
+        return self.ai_service.resolve_ai_provider_config(
+            provider_override, model_override
+        )
 
     def call_ai_provider(
         self, provider: str, api_key: str, model: str, prompt: str
@@ -959,69 +888,12 @@ class ChatApp:
         self.file_observer = None
 
     def read_recent_lines(self, path: Path, max_lines: int) -> list[str]:
-        if max_lines <= 0:
-            return []
-        if not path.exists():
-            return []
-
-        raw_lines: list[bytes] = []
-        chunk_size = 8192
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            position = f.tell()
-            buffer = b""
-
-            while position > 0 and len(raw_lines) <= max_lines:
-                read_size = min(chunk_size, position)
-                position -= read_size
-                f.seek(position)
-                buffer = f.read(read_size) + buffer
-                raw_lines = buffer.splitlines()
-
-            decoded = [row.decode("utf-8", errors="replace") for row in raw_lines]
-            return decoded[-max_lines:]
+        self.ensure_services_initialized()
+        return self.storage_service.read_recent_lines(path, max_lines)
 
     def parse_event_line(self, line: str) -> dict[str, Any] | None:
-        line = line.strip()
-        if not line:
-            return None
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            logger.warning("Invalid message JSONL row ignored.")
-            return None
-        if not isinstance(data, dict):
-            return None
-
-        event_type = str(data.get("type", "")).strip().lower()
-        if event_type not in EVENT_ALLOWED_TYPES:
-            logger.warning("Invalid event type '%s' ignored.", event_type)
-            return None
-        author = data.get("author")
-        text = data.get("text")
-        if not isinstance(author, str) or not isinstance(text, str):
-            logger.warning(
-                "Invalid event payload ignored (author/text must be string)."
-            )
-            return None
-        if "v" in data:
-            version = data.get("v")
-            if not isinstance(version, int):
-                logger.warning("Invalid event schema version ignored.")
-                return None
-            if version > EVENT_SCHEMA_VERSION:
-                logger.warning("Future event schema version %s ignored.", version)
-                return None
-        else:
-            data["v"] = EVENT_SCHEMA_VERSION
-        if "ts" not in data:
-            data["ts"] = datetime.now().isoformat(timespec="seconds")
-        if not isinstance(data.get("ts"), str):
-            data["ts"] = str(data.get("ts"))
-        data["type"] = event_type
-        data["author"] = author
-        data["text"] = text
-        return data
+        self.ensure_services_initialized()
+        return self.storage_service.parse_event_line(line)
 
     def append_local_event(self, event: dict[str, Any]) -> None:
         self.message_events.append(event)
@@ -1118,6 +990,16 @@ class ChatApp:
             self.ai_preview_text = ""
             self.ai_cancel_event = Event()
 
+    def ensure_services_initialized(self) -> None:
+        if not hasattr(self, "storage_service"):
+            self.storage_service = StorageService(self)
+        if not hasattr(self, "memory_service"):
+            self.memory_service = MemoryService(self)
+        if not hasattr(self, "ai_service"):
+            self.ai_service = AIService(self)
+        if not hasattr(self, "runtime_service"):
+            self.runtime_service = RuntimeService(self)
+
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
     ) -> list[tuple[str, str]]:
@@ -1211,29 +1093,8 @@ class ChatApp:
         self.append_system_message(f"Joined room #{room}.")
 
     def load_recent_messages(self) -> None:
-        message_file = self.get_message_file()
-        if not message_file.exists():
-            self.output_field.text = ""
-            self.last_pos_by_room[self.current_room] = 0
-            return
-
-        loaded_events: list[dict[str, Any]] = []
-        try:
-            for line in self.read_recent_lines(message_file, MAX_MESSAGES * 2):
-                event = self.parse_event_line(line)
-                if event is not None:
-                    loaded_events.append(event)
-            self.last_pos_by_room[self.current_room] = message_file.stat().st_size
-        except OSError as exc:
-            logger.warning(
-                "Failed loading history for room %s: %s", self.current_room, exc
-            )
-            loaded_events = []
-            self.last_pos_by_room[self.current_room] = 0
-
-        self.message_events = loaded_events[-MAX_MESSAGES:]
-        self.refresh_output_from_events()
-        self.rebuild_search_hits()
+        self.ensure_services_initialized()
+        self.storage_service.load_recent_messages()
 
     def get_ai_provider_summary(self) -> str:
         providers = self.ai_config.get("providers", {})
@@ -1382,116 +1243,32 @@ class ChatApp:
         )
 
     def ensure_memory_state_initialized(self) -> None:
-        if not hasattr(self, "memory_draft_active"):
-            self.memory_draft_active = False
-            self.memory_draft_mode = "none"
-            self.memory_draft = None
+        self.ensure_services_initialized()
+        self.memory_service.ensure_memory_state_initialized()
 
     def clear_memory_draft(self) -> None:
-        self.ensure_memory_state_initialized()
-        self.memory_draft_active = False
-        self.memory_draft_mode = "none"
-        self.memory_draft = None
+        self.ensure_services_initialized()
+        self.memory_service.clear_memory_draft()
 
     def load_memory_entries(self) -> list[dict[str, Any]]:
-        self.ensure_memory_paths()
-        entries: list[dict[str, Any]] = []
-        try:
-            with open(self.get_memory_file(), "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(data, dict):
-                        entries.append(data)
-        except OSError as exc:
-            logger.warning("Failed reading memory entries: %s", exc)
-        return entries
+        self.ensure_services_initialized()
+        return self.memory_service.load_memory_entries()
 
     def normalize_text_tokens(self, text: str) -> set[str]:
-        return {
-            token
-            for token in re.findall(r"[a-z0-9]{2,}", text.lower())
-            if len(token) >= 2
-        }
+        self.ensure_services_initialized()
+        return self.memory_service.normalize_text_tokens(text)
 
     def score_memory_candidate(
         self, prompt_tokens: set[str], entry: dict[str, Any]
     ) -> float:
-        summary = str(entry.get("summary", ""))
-        topic = str(entry.get("topic", ""))
-        source = str(entry.get("source", ""))
-        tags = entry.get("tags", [])
-        if not isinstance(tags, list):
-            tags = []
-
-        summary_tokens = self.normalize_text_tokens(summary)
-        topic_tokens = self.normalize_text_tokens(topic)
-        source_tokens = self.normalize_text_tokens(source)
-        tag_tokens = self.normalize_text_tokens(" ".join(str(tag) for tag in tags))
-
-        if not prompt_tokens:
-            return 0.0
-
-        overlap_summary = len(prompt_tokens & summary_tokens)
-        overlap_topic = len(prompt_tokens & topic_tokens)
-        overlap_tags = len(prompt_tokens & tag_tokens)
-        overlap_source = len(prompt_tokens & source_tokens)
-
-        confidence = str(entry.get("confidence", "")).strip().lower()
-        confidence_boost = 0.0
-        if confidence == "high":
-            confidence_boost = 0.4
-        elif confidence == "med":
-            confidence_boost = 0.15
-
-        recency_boost = 0.0
-        ts = str(entry.get("ts", "")).strip()
-        if ts:
-            recency_boost = 0.05
-
-        return sum(
-            [
-                overlap_summary * 2.2,
-                overlap_topic * 1.6,
-                overlap_tags * 1.1,
-                overlap_source * 0.4,
-                confidence_boost,
-                recency_boost,
-            ]
-        )
+        self.ensure_services_initialized()
+        return self.memory_service.score_memory_candidate(prompt_tokens, entry)
 
     def prefilter_memory_candidates(
         self, prompt: str, entries: list[dict[str, Any]], limit: int
     ) -> list[dict[str, Any]]:
-        prompt_tokens = self.normalize_text_tokens(prompt)
-        scored: list[tuple[float, dict[str, Any]]] = []
-
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            mem_id = str(entry.get("id", "")).strip()
-            summary = str(entry.get("summary", "")).strip()
-            if not mem_id or not summary:
-                continue
-            score = self.score_memory_candidate(prompt_tokens, entry)
-            if score <= 0:
-                continue
-            scored.append((score, entry))
-
-        scored.sort(
-            key=lambda item: (
-                item[0],
-                str(item[1].get("confidence", "")).lower() == "high",
-                str(item[1].get("ts", "")),
-            ),
-            reverse=True,
-        )
-        return [entry for _, entry in scored[:limit]]
+        self.ensure_services_initialized()
+        return self.memory_service.prefilter_memory_candidates(prompt, entries, limit)
 
     def rerank_memory_candidates_with_ai(
         self,
@@ -1499,518 +1276,76 @@ class ChatApp:
         prompt: str,
         candidates: list[dict[str, Any]],
     ) -> list[str] | None:
-        if not candidates:
-            return []
-
-        lines = []
-        for entry in candidates:
-            mem_id = str(entry.get("id", "")).strip()
-            topic = str(entry.get("topic", "general")).strip()
-            confidence = str(entry.get("confidence", "med")).strip().lower()
-            summary = str(entry.get("summary", "")).strip()
-            if not mem_id or not summary:
-                continue
-            lines.append(
-                f"{mem_id} | topic={topic} | confidence={confidence} | summary={summary[:AI_MEMORY_SUMMARY_CHAR_LIMIT]}"
-            )
-        if not lines:
-            return []
-
-        rerank_prompt = (
-            "Given the user prompt and candidate memory entries, return strict JSON only: "
-            '{"ids":["mem_id1","mem_id2", "..."]}. '
-            "Rank by usefulness for answering the prompt. Use only provided ids.\n\n"
-            f"User prompt:\n{prompt}\n\n"
-            "Candidates:\n" + "\n".join(lines)
+        self.ensure_services_initialized()
+        return self.memory_service.rerank_memory_candidates_with_ai(
+            provider_cfg, prompt, candidates
         )
-        try:
-            raw = self.call_ai_provider(
-                provider=provider_cfg["provider"],
-                api_key=provider_cfg["api_key"],
-                model=provider_cfg["model"],
-                prompt=rerank_prompt,
-            )
-        except Exception:
-            return None
-
-        data = self.extract_json_object(raw)
-        if not isinstance(data, dict):
-            return None
-        ids = data.get("ids", [])
-        if not isinstance(ids, list):
-            return None
-        allowed = {str(entry.get("id", "")).strip() for entry in candidates}
-        ranked_ids = []
-        for value in ids:
-            mem_id = str(value).strip()
-            if mem_id and mem_id in allowed and mem_id not in ranked_ids:
-                ranked_ids.append(mem_id)
-        return ranked_ids
 
     def select_memory_for_prompt(
         self, prompt: str, provider_cfg: dict[str, str]
     ) -> tuple[list[dict[str, Any]], str | None]:
-        entries = self.load_memory_entries()
-        if not entries:
-            return [], None
-
-        prefiltered = self.prefilter_memory_candidates(
-            prompt=prompt,
-            entries=entries,
-            limit=AI_MEMORY_PREFILTER_LIMIT,
-        )
-        if not prefiltered:
-            return [], None
-
-        ranked_ids = self.rerank_memory_candidates_with_ai(
-            provider_cfg=provider_cfg,
-            prompt=prompt,
-            candidates=prefiltered,
-        )
-        fallback_warning: str | None = None
-        if ranked_ids is None:
-            ranked = prefiltered
-            fallback_warning = (
-                "Memory rerank unavailable; using lexical memory selection."
-            )
-        else:
-            index = {str(entry.get("id", "")).strip(): entry for entry in prefiltered}
-            ranked = [index[mem_id] for mem_id in ranked_ids if mem_id in index]
-            if not ranked:
-                ranked = prefiltered
-
-        return ranked[:AI_MEMORY_FINAL_LIMIT], fallback_warning
+        self.ensure_services_initialized()
+        return self.memory_service.select_memory_for_prompt(prompt, provider_cfg)
 
     def build_memory_context_block(self, selected: list[dict[str, Any]]) -> str:
-        if not selected:
-            return ""
-        lines: list[str] = []
-        budget = AI_MEMORY_CONTEXT_CHAR_BUDGET
-        for entry in selected:
-            mem_id = str(entry.get("id", "")).strip()
-            topic = str(entry.get("topic", "general")).strip()
-            confidence = str(entry.get("confidence", "med")).strip().lower()
-            summary = str(entry.get("summary", "")).strip()[
-                :AI_MEMORY_SUMMARY_CHAR_LIMIT
-            ]
-            source = str(entry.get("source", "")).strip()[:80]
-            if not mem_id or not summary:
-                continue
-            row = (
-                f"- {mem_id} | topic={topic} | confidence={confidence} | "
-                f"summary={summary} | source={source}"
-            )
-            if len(row) > budget:
-                break
-            lines.append(row)
-            budget -= len(row)
-            if budget <= 0:
-                break
-
-        if not lines:
-            return ""
-        return (
-            "Shared memory context (use if relevant, do not fabricate):\n"
-            + "\n".join(lines)
-        )
+        self.ensure_services_initialized()
+        return self.memory_service.build_memory_context_block(selected)
 
     def format_memory_ids_line(self, memory_ids: list[str]) -> str:
-        if not memory_ids:
-            return ""
-        return f"Memory used: {', '.join(memory_ids)}"
+        self.ensure_services_initialized()
+        return self.memory_service.format_memory_ids_line(memory_ids)
 
     def find_duplicate_memory_candidates(
         self, draft: dict[str, Any], limit: int = 3
     ) -> list[dict[str, Any]]:
-        draft_summary = str(draft.get("summary", "")).strip().lower()
-        draft_topic = str(draft.get("topic", "")).strip().lower()
-        if not draft_summary:
-            return []
-
-        entries = self.load_memory_entries()
-        scored: list[tuple[float, dict[str, Any]]] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            existing_summary = str(entry.get("summary", "")).strip().lower()
-            if not existing_summary:
-                continue
-            sim = difflib.SequenceMatcher(None, draft_summary, existing_summary).ratio()
-            draft_tokens = self.normalize_text_tokens(draft_summary)
-            existing_tokens = self.normalize_text_tokens(existing_summary)
-            overlap_ratio = 0.0
-            if draft_tokens and existing_tokens:
-                overlap_ratio = len(draft_tokens & existing_tokens) / max(
-                    len(draft_tokens), 1
-                )
-            topic_bonus = 0.0
-            if (
-                draft_topic
-                and draft_topic == str(entry.get("topic", "")).strip().lower()
-            ):
-                topic_bonus = 0.08
-            score = max(sim, overlap_ratio) + topic_bonus
-            if score >= MEMORY_DUPLICATE_THRESHOLD:
-                scored.append((score, entry))
-
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [entry for _, entry in scored[:limit]]
+        self.ensure_services_initialized()
+        return self.memory_service.find_duplicate_memory_candidates(draft, limit)
 
     def maybe_warn_memory_duplicates(self, draft: dict[str, Any]) -> None:
-        matches = self.find_duplicate_memory_candidates(draft)
-        if not matches:
-            return
-        lines = ["Potential duplicate memory entries:"]
-        for entry in matches:
-            mem_id = str(entry.get("id", "?"))
-            topic = str(entry.get("topic", "general"))
-            summary = str(entry.get("summary", ""))[:120]
-            lines.append(f"{mem_id} [{topic}] {summary}")
-        self.append_system_message("\n".join(lines))
+        self.ensure_services_initialized()
+        self.memory_service.maybe_warn_memory_duplicates(draft)
 
     def write_memory_entry(self, entry: dict[str, Any]) -> bool:
-        self.ensure_locking_dependency()
-        assert portalocker is not None
-        self.ensure_memory_paths()
-        memory_file = self.get_memory_file()
-        row = json.dumps(entry, ensure_ascii=True)
-        for attempt in range(LOCK_MAX_ATTEMPTS):
-            try:
-                with portalocker.Lock(
-                    str(memory_file),
-                    mode="a",
-                    timeout=LOCK_TIMEOUT_SECONDS,
-                    fail_when_locked=True,
-                    encoding="utf-8",
-                ) as f:
-                    f.write(row + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                return True
-            except portalocker.exceptions.LockException:
-                pass
-            except OSError:
-                pass
-            if attempt == LOCK_MAX_ATTEMPTS - 1:
-                break
-            delay = min(
-                LOCK_BACKOFF_MAX_SECONDS,
-                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
-            )
-            time.sleep(delay + random.uniform(0, 0.03))
-        return False
+        self.ensure_services_initialized()
+        return self.memory_service.write_memory_entry(entry)
 
     def get_last_ai_response_event(self) -> dict[str, Any] | None:
-        for event in reversed(self.message_events):
-            if str(event.get("type", "")) == "ai_response":
-                return event
-        return None
+        self.ensure_services_initialized()
+        return self.memory_service.get_last_ai_response_event()
 
     def extract_json_object(self, text: str) -> dict[str, Any] | None:
-        text = text.strip()
-        if not text:
-            return None
-        try:
-            obj = json.loads(text)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            return None
-        try:
-            obj = json.loads(match.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            return None
-        return None
+        self.ensure_services_initialized()
+        return self.memory_service.extract_json_object(text)
 
     def build_memory_source(self, event: dict[str, Any]) -> str:
-        request_id = str(event.get("request_id", "")).strip()
-        ts = str(event.get("ts", "")).strip()
-        if request_id:
-            return f"room:{self.current_room} request:{request_id} ts:{ts}"
-        return f"room:{self.current_room} ts:{ts}"
+        self.ensure_services_initialized()
+        return self.memory_service.build_memory_source(event)
 
     def draft_memory_from_last_ai_response(
         self,
     ) -> tuple[dict[str, Any] | None, str | None]:
-        source_event = self.get_last_ai_response_event()
-        if source_event is None:
-            return None, "No recent AI response found. Run /ai first."
-
-        provider_cfg, config_error = self.resolve_ai_provider_config(None, None)
-        if config_error:
-            return None, config_error
-        assert provider_cfg
-
-        source_text = str(source_event.get("text", "")).strip()
-        if not source_text:
-            return None, "Last AI response was empty."
-
-        prompt = (
-            "Summarize the following assistant response into reusable team memory. "
-            "Return strict JSON only with keys: summary, topic, confidence, tags. "
-            "confidence must be low, med, or high.\n\n"
-            f"Assistant response:\n{source_text}"
-        )
-        try:
-            drafted = self.call_ai_provider(
-                provider=provider_cfg["provider"],
-                api_key=provider_cfg["api_key"],
-                model=provider_cfg["model"],
-                prompt=prompt,
-            )
-        except Exception as exc:
-            return None, f"Memory draft generation failed: {exc}"
-
-        data = self.extract_json_object(drafted) or {}
-        summary = str(data.get("summary", "")).strip()
-        if not summary:
-            summary = source_text[:280]
-        topic = str(data.get("topic", "")).strip() or "general"
-        confidence = str(data.get("confidence", "")).strip().lower() or "med"
-        if confidence not in {"low", "med", "high"}:
-            confidence = "med"
-        tags = data.get("tags", [])
-        if not isinstance(tags, list):
-            tags = []
-
-        draft = {
-            "summary": summary,
-            "topic": topic,
-            "confidence": confidence,
-            "source": self.build_memory_source(source_event),
-            "room": self.current_room,
-            "origin_event_ref": str(
-                source_event.get("request_id", source_event.get("ts", ""))
-            ),
-            "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
-        }
-        return draft, None
+        self.ensure_services_initialized()
+        return self.memory_service.draft_memory_from_last_ai_response()
 
     def show_memory_draft_preview(self) -> None:
-        self.ensure_memory_state_initialized()
-        if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
-            self.append_system_message("No active memory draft.")
-            return
-        draft = self.memory_draft
-        preview = (
-            "Memory Draft:\n"
-            f"Summary: {draft.get('summary', '')}\n"
-            f"Topic: {draft.get('topic', '')}\n"
-            f"Confidence: {draft.get('confidence', '')}\n"
-            f"Source: {draft.get('source', '')}"
-        )
-        self.append_system_message(preview)
-        if self.memory_draft_mode == "confirm":
-            self.append_system_message("Confirm memory entry? (y/n)")
+        self.ensure_services_initialized()
+        self.memory_service.show_memory_draft_preview()
 
     def confirm_memory_draft(self) -> None:
-        self.ensure_memory_state_initialized()
-        if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
-            self.append_system_message("No active memory draft.")
-            return
-        draft = self.memory_draft
-        summary = str(draft.get("summary", "")).strip()
-        source = str(draft.get("source", "")).strip()
-        confidence = str(draft.get("confidence", "")).strip().lower()
-        if not summary:
-            self.append_system_message(
-                "Draft summary is empty. Use /memory edit summary <text>."
-            )
-            return
-        if not source:
-            self.append_system_message(
-                "Draft source is empty. Use /memory edit source <text>."
-            )
-            return
-        if confidence not in {"low", "med", "high"}:
-            self.append_system_message("Confidence must be low, med, or high.")
-            return
-
-        entry = {
-            "id": f"mem_{int(time.time())}_{uuid4().hex[:6]}",
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "author": self.name,
-            "summary": summary,
-            "topic": str(draft.get("topic", "general")).strip() or "general",
-            "confidence": confidence,
-            "source": source,
-            "room": str(draft.get("room", self.current_room)),
-            "origin_event_ref": str(draft.get("origin_event_ref", "")),
-            "tags": list(draft.get("tags", [])),
-        }
-        self.maybe_warn_memory_duplicates(entry)
-        if not self.write_memory_entry(entry):
-            self.append_system_message("Failed to write shared memory entry.")
-            return
-        self.append_system_message(f"Memory saved: {entry['id']}")
-        self.clear_memory_draft()
+        self.ensure_services_initialized()
+        self.memory_service.confirm_memory_draft()
 
     def handle_memory_confirmation_input(self, text: str) -> bool:
-        self.ensure_memory_state_initialized()
-        if not self.memory_draft_active:
-            return False
-        if self.memory_draft_mode != "confirm":
-            return False
-        lowered = text.strip().lower()
-        if lowered == "y":
-            self.confirm_memory_draft()
-            return True
-        if lowered == "n":
-            self.memory_draft_mode = "edit"
-            self.append_system_message(
-                "Draft rejected. Edit fields: /memory edit summary|topic|confidence|source <value>. "
-                "Then use /memory confirm or /memory cancel."
-            )
-            return True
-        return False
+        self.ensure_services_initialized()
+        return self.memory_service.handle_memory_confirmation_input(text)
 
     def handle_memory_command(self, args: str) -> None:
-        self.ensure_memory_state_initialized()
-        trimmed = args.strip()
-        if not trimmed or trimmed.lower() == "help":
-            self.append_system_message(
-                "Memory commands: /memory add, /memory confirm, /memory cancel, "
-                "/memory show-draft, /memory edit <field> <value>, /memory list [N], /memory search <text>"
-            )
-            return
-
-        try:
-            tokens = shlex.split(trimmed)
-        except ValueError:
-            self.append_system_message("Invalid /memory syntax. Check quotes.")
-            return
-        if not tokens:
-            self.append_system_message("Usage: /memory help")
-            return
-
-        action = tokens[0].lower()
-        if action == "add":
-            if self.memory_draft_active:
-                self.append_system_message(
-                    "A memory draft is already active. Use /memory confirm or /memory cancel."
-                )
-                return
-            draft, error = self.draft_memory_from_last_ai_response()
-            if error:
-                self.append_system_message(error)
-                return
-            assert draft is not None
-            self.memory_draft = draft
-            self.memory_draft_active = True
-            self.memory_draft_mode = "confirm"
-            self.maybe_warn_memory_duplicates(draft)
-            self.show_memory_draft_preview()
-            return
-
-        if action == "show-draft":
-            self.show_memory_draft_preview()
-            return
-
-        if action == "confirm":
-            self.confirm_memory_draft()
-            return
-
-        if action == "cancel":
-            if not self.memory_draft_active:
-                self.append_system_message("No active memory draft.")
-                return
-            self.clear_memory_draft()
-            self.append_system_message("Memory draft canceled.")
-            return
-
-        if action == "edit":
-            if not self.memory_draft_active or not isinstance(self.memory_draft, dict):
-                self.append_system_message("No active memory draft.")
-                return
-            if len(tokens) < 3:
-                self.append_system_message(
-                    "Usage: /memory edit <summary|topic|confidence|source> <value>"
-                )
-                return
-            field = tokens[1].strip().lower()
-            value = " ".join(tokens[2:]).strip()
-            if field not in {"summary", "topic", "confidence", "source"}:
-                self.append_system_message(
-                    "Editable fields: summary, topic, confidence, source."
-                )
-                return
-            if field == "confidence":
-                value = value.lower()
-                if value not in {"low", "med", "high"}:
-                    self.append_system_message("Confidence must be low, med, or high.")
-                    return
-            self.memory_draft[field] = value
-            self.append_system_message(f"Updated draft {field}.")
-            self.show_memory_draft_preview()
-            return
-
-        if action == "list":
-            limit = 10
-            if len(tokens) > 1:
-                try:
-                    limit = max(1, min(100, int(tokens[1])))
-                except ValueError:
-                    self.append_system_message("Usage: /memory list [limit]")
-                    return
-            entries = self.load_memory_entries()
-            if not entries:
-                self.append_system_message("No shared memory entries found.")
-                return
-            lines = ["Shared Memory:"]
-            for entry in entries[-limit:]:
-                lines.append(
-                    f"{entry.get('id', '?')} [{entry.get('confidence', '?')}] "
-                    f"{entry.get('topic', 'general')}: {entry.get('summary', '')}"
-                )
-            self.append_system_message("\n".join(lines))
-            return
-
-        if action == "search":
-            if len(tokens) < 2:
-                self.append_system_message("Usage: /memory search <query>")
-                return
-            query = " ".join(tokens[1:]).strip().lower()
-            entries = self.load_memory_entries()
-            matches = []
-            for entry in entries:
-                haystack = " ".join(
-                    [
-                        str(entry.get("summary", "")),
-                        str(entry.get("topic", "")),
-                        str(entry.get("source", "")),
-                    ]
-                ).lower()
-                if query in haystack:
-                    matches.append(entry)
-            if not matches:
-                self.append_system_message(f"No memory matches for '{query}'.")
-                return
-            lines = [f"Memory matches ({len(matches)}):"]
-            for entry in matches[-10:]:
-                lines.append(
-                    f"{entry.get('id', '?')} [{entry.get('topic', 'general')}] {entry.get('summary', '')}"
-                )
-            self.append_system_message("\n".join(lines))
-            return
-
-        self.append_system_message("Unknown /memory command. Use /memory help.")
+        self.ensure_services_initialized()
+        self.memory_service.handle_memory_command(args)
 
     def is_transient_ai_error(self, exc: Exception) -> bool:
-        text = str(exc).lower()
-        if "http 429" in text:
-            return True
-        if "http 5" in text:
-            return True
-        if "timed out" in text or "timeout" in text:
-            return True
-        if "temporarily unavailable" in text:
-            return True
-        return False
+        self.ensure_services_initialized()
+        return self.ai_service.is_transient_ai_error(exc)
 
     def start_ai_request_state(
         self, provider: str, model: str, target_room: str, scope: str
@@ -2101,137 +1436,14 @@ class ChatApp:
     def run_ai_request_with_retry(
         self, request_id: str, provider: str, api_key: str, model: str, prompt: str
     ) -> tuple[str | None, str | None]:
-        self.ensure_ai_state_initialized()
-        try:
-            answer = self.call_ai_provider(
-                provider=provider,
-                api_key=api_key,
-                model=model,
-                prompt=prompt,
-            )
-            return answer, None
-        except Exception as exc:
-            if self.is_ai_request_cancelled(request_id):
-                return None, "AI request cancelled."
-            if not self.is_transient_ai_error(exc):
-                return None, f"AI request failed: {exc}"
-
-            with self.ai_state_lock:
-                if self.ai_active_request_id == request_id:
-                    self.ai_retry_count = 1
-            self.set_ai_preview_text(request_id, "retrying after transient error...")
-            time.sleep(AI_RETRY_BACKOFF_SECONDS)
-            if self.is_ai_request_cancelled(request_id):
-                return None, "AI request cancelled."
-            try:
-                answer = self.call_ai_provider(
-                    provider=provider,
-                    api_key=api_key,
-                    model=model,
-                    prompt=prompt,
-                )
-                return answer, None
-            except Exception as retry_exc:
-                return None, f"AI request failed after retry: {retry_exc}"
+        self.ensure_services_initialized()
+        return self.ai_service.run_ai_request_with_retry(
+            request_id, provider, api_key, model, prompt
+        )
 
     def handle_ai_command(self, args: str) -> None:
-        lowered = args.strip().lower()
-        if lowered == "status":
-            self.append_system_message(self.build_ai_status_text())
-            return
-        if lowered == "cancel":
-            if self.request_ai_cancel():
-                self.append_system_message("AI cancellation requested.")
-            else:
-                self.append_system_message("No active AI request.")
-            return
-
-        parsed, parse_error = self.parse_ai_args(args)
-        if parse_error:
-            self.append_system_message(parse_error)
-            return
-
-        provider_cfg, config_error = self.resolve_ai_provider_config(
-            parsed.get("provider_override"),
-            parsed.get("model_override"),
-        )
-        if config_error:
-            self.append_system_message(config_error)
-            return
-
-        assert provider_cfg
-        provider = provider_cfg["provider"]
-        model = provider_cfg["model"]
-        prompt = parsed["prompt"]
-        disable_memory = bool(parsed.get("disable_memory"))
-        is_private = bool(parsed.get("is_private")) or self.is_local_room()
-        target_room = AI_DM_ROOM if is_private else self.current_room
-        scope = "private" if is_private else "room"
-        selected_memory: list[dict[str, Any]] = []
-        memory_warning: str | None = None
-        effective_prompt = prompt
-        if not disable_memory:
-            selected_memory, memory_warning = self.select_memory_for_prompt(
-                prompt=prompt,
-                provider_cfg=provider_cfg,
-            )
-            memory_context = self.build_memory_context_block(selected_memory)
-            if memory_context:
-                effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
-        if memory_warning:
-            self.append_system_message(memory_warning)
-
-        memory_ids_used = [
-            str(entry.get("id", "")).strip()
-            for entry in selected_memory
-            if str(entry.get("id", "")).strip()
-        ]
-        memory_topics_used = [
-            str(entry.get("topic", "general")).strip() or "general"
-            for entry in selected_memory
-        ]
-
-        request_id = self.start_ai_request_state(
-            provider=provider, model=model, target_room=target_room, scope=scope
-        )
-        if request_id is None:
-            self.append_system_message("AI busy. Use /ai status or /ai cancel.")
-            return
-
-        prompt_event = self.build_event("ai_prompt", prompt)
-        prompt_event["provider"] = provider
-        prompt_event["model"] = model
-        prompt_event["request_id"] = request_id
-        if memory_ids_used:
-            prompt_event["memory_ids_used"] = memory_ids_used
-        if not self.write_to_file(prompt_event, room=target_room):
-            self.clear_ai_request_state(request_id)
-            self.append_system_message("Error: Failed to persist AI prompt.")
-            return
-
-        self.append_system_message(
-            f"AI request sent ({scope}) via {provider}:{model} [{request_id}]."
-        )
-        self.refresh_output_from_events()
-
-        Thread(
-            target=self.process_ai_response,
-            args=(
-                request_id,
-                provider,
-                provider_cfg["api_key"],
-                model,
-                effective_prompt,
-                target_room,
-                is_private,
-                memory_ids_used,
-                memory_topics_used,
-            ),
-            daemon=True,
-        ).start()
-        Thread(
-            target=self.run_ai_preview_pulse, args=(request_id,), daemon=True
-        ).start()
+        self.ensure_services_initialized()
+        self.ai_service.handle_ai_command(args)
 
     def process_ai_response(
         self,
@@ -2245,59 +1457,18 @@ class ChatApp:
         memory_ids_used: list[str],
         memory_topics_used: list[str],
     ) -> None:
-        answer, error_text = self.run_ai_request_with_retry(
-            request_id=request_id,
-            provider=provider,
-            api_key=api_key,
-            model=model,
-            prompt=prompt,
+        self.ensure_services_initialized()
+        self.ai_service.process_ai_response(
+            request_id,
+            provider,
+            api_key,
+            model,
+            prompt,
+            target_room,
+            is_private,
+            memory_ids_used,
+            memory_topics_used,
         )
-        if error_text:
-            error_event = self.build_event("system", error_text)
-            error_event["request_id"] = request_id
-            self.write_to_file(error_event, room=target_room)
-            should_notify_private_failure = is_private and not self.is_local_room()
-            if should_notify_private_failure:
-                should_notify_private_failure = "cancelled" not in error_text.lower()
-            if should_notify_private_failure:
-                self.append_system_message(f"AI request failed in #ai-dm: {error_text}")
-            self.clear_ai_request_state(request_id)
-            self.refresh_output_from_events()
-            return
-        assert answer is not None
-
-        if self.is_ai_request_cancelled(request_id):
-            canceled_event = self.build_event("system", "AI request cancelled.")
-            canceled_event["request_id"] = request_id
-            self.write_to_file(canceled_event, room=target_room)
-            self.clear_ai_request_state(request_id)
-            self.refresh_output_from_events()
-            return
-
-        response_event = self.build_event("ai_response", answer)
-        response_event["provider"] = provider
-        response_event["model"] = model
-        response_event["request_id"] = request_id
-        if memory_ids_used:
-            response_event["memory_ids_used"] = memory_ids_used
-            response_event["memory_topics_used"] = memory_topics_used
-        if not self.write_to_file(response_event, room=target_room):
-            self.clear_ai_request_state(request_id)
-            self.append_system_message("Error: Failed to persist AI response.")
-            return
-
-        ids_line = self.format_memory_ids_line(memory_ids_used)
-        if ids_line:
-            memory_event = self.build_event("system", ids_line)
-            memory_event["request_id"] = request_id
-            self.write_to_file(memory_event, room=target_room)
-
-        if is_private and not self.is_local_room():
-            self.append_system_message(
-                "Private AI response saved to #ai-dm. Use /join ai-dm to review."
-            )
-        self.clear_ai_request_state(request_id)
-        self.refresh_output_from_events()
 
     def build_command_handlers(self) -> dict[str, Any]:
         return {
@@ -2454,45 +1625,8 @@ class ChatApp:
     def write_to_file(
         self, payload: dict[str, Any] | str, room: str | None = None
     ) -> bool:
-        self.ensure_locking_dependency()
-        assert portalocker is not None
-
-        message_file = self.get_message_file(room)
-        for attempt in range(LOCK_MAX_ATTEMPTS):
-            try:
-                with portalocker.Lock(
-                    str(message_file),
-                    mode="a",
-                    timeout=LOCK_TIMEOUT_SECONDS,
-                    fail_when_locked=True,
-                    encoding="utf-8",
-                ) as f:
-                    if isinstance(payload, dict):
-                        row = json.dumps(payload, ensure_ascii=True)
-                    else:
-                        row = payload.rstrip("\n")
-                    f.write(row + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                self.signal_monitor_refresh()
-                return True
-            except portalocker.exceptions.LockException:
-                pass
-            except OSError:
-                pass
-            except Exception as exc:
-                logger.warning("Unexpected write_to_file failure: %s", exc)
-                return False
-
-            if attempt == LOCK_MAX_ATTEMPTS - 1:
-                break
-            delay = min(
-                LOCK_BACKOFF_MAX_SECONDS,
-                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
-            )
-            time.sleep(delay + random.uniform(0, 0.03))
-
-        return False
+        self.ensure_services_initialized()
+        return self.storage_service.write_to_file(payload, room)
 
     def force_heartbeat(self) -> None:
         if self.is_local_room():
@@ -2513,73 +1647,8 @@ class ChatApp:
             logger.warning("Failed forced heartbeat update: %s", exc)
 
     async def monitor_messages(self) -> None:
-        self.ensure_monitor_state_initialized()
-        next_presence_refresh = 0.0
-        while self.running:
-            now = time.monotonic()
-            if now >= next_presence_refresh:
-                self.refresh_presence_sidebar()
-                next_presence_refresh = now + PRESENCE_REFRESH_INTERVAL_SECONDS
-
-            room = self.current_room
-            message_file = self.get_message_file(room)
-            self.last_pos_by_room.setdefault(room, 0)
-            had_new_messages = False
-
-            if message_file.exists():
-                try:
-                    with open(message_file, "r", encoding="utf-8") as f:
-                        current_size = os.path.getsize(message_file)
-                        last_pos = self.last_pos_by_room[room]
-                        if current_size < last_pos:
-                            logger.warning(
-                                "Chat file shrank in room %s from offset %s to %s; resetting.",
-                                room,
-                                last_pos,
-                                current_size,
-                            )
-                            last_pos = 0
-                        f.seek(last_pos)
-                        new_lines = f.readlines()
-                        if new_lines and room == self.current_room:
-                            had_new_messages = True
-                            for line in new_lines:
-                                event = self.parse_event_line(line)
-                                if event is None:
-                                    continue
-                                self.message_events.append(event)
-                                if len(self.message_events) > MAX_MESSAGES:
-                                    self.message_events.pop(0)
-                            self.refresh_output_from_events()
-                            self.rebuild_search_hits()
-                        self.last_pos_by_room[room] = f.tell()
-                except OSError as exc:
-                    logger.warning(
-                        "Failed while monitoring room %s chat file %s: %s",
-                        room,
-                        message_file,
-                        exc,
-                    )
-            if had_new_messages:
-                self.monitor_idle_cycles = 0
-                self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_MIN_SECONDS
-            else:
-                self.monitor_idle_cycles = min(self.monitor_idle_cycles + 1, 20)
-                if self.monitor_idle_cycles >= 4:
-                    self.monitor_poll_interval_seconds = min(
-                        MONITOR_POLL_INTERVAL_MAX_SECONDS,
-                        self.monitor_poll_interval_seconds + 0.1,
-                    )
-                else:
-                    self.monitor_poll_interval_seconds = (
-                        MONITOR_POLL_INTERVAL_ACTIVE_SECONDS
-                    )
-
-            if self.monitor_refresh_event.is_set():
-                self.monitor_refresh_event.clear()
-                self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_MIN_SECONDS
-
-            await asyncio.sleep(self.monitor_poll_interval_seconds)
+        self.ensure_services_initialized()
+        await self.runtime_service.monitor_messages()
 
     def run(self) -> None:
         print(f"Connecting to: {self.base_dir}")
