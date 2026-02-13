@@ -6,10 +6,23 @@ SET "BASE_DIR=%~dp0"
 SET "VENV_DIR=%BASE_DIR%venv"
 SET "REQ_FILE=%BASE_DIR%requirements.txt"
 SET "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
+SET "PY_CMD="
 
-:: 1. Check if Python is installed globally
-python --version >nul 2>&1
-IF %ERRORLEVEL% NEQ 0 GOTO ERROR_NO_PYTHON
+:: 1. Resolve a global Python command (prefer py launcher on Windows)
+py -3 --version >nul 2>&1
+IF %ERRORLEVEL% EQU 0 SET "PY_CMD=py -3"
+
+IF NOT DEFINED PY_CMD (
+    python --version >nul 2>&1
+    IF %ERRORLEVEL% EQU 0 SET "PY_CMD=python"
+)
+
+IF NOT DEFINED PY_CMD (
+    python3 --version >nul 2>&1
+    IF %ERRORLEVEL% EQU 0 SET "PY_CMD=python3"
+)
+
+IF NOT DEFINED PY_CMD GOTO ERROR_NO_PYTHON
 
 :: 2. Check if Venv exists
 IF NOT EXIST "%VENV_DIR%" GOTO CREATE_VENV
@@ -31,7 +44,7 @@ rmdir /s /q "%VENV_DIR%"
 
 :CREATE_VENV
 echo [System] Creating virtual environment...
-python -m venv "%VENV_DIR%"
+%PY_CMD% -m venv "%VENV_DIR%"
 IF %ERRORLEVEL% NEQ 0 GOTO ERROR_VENV_CREATE
 
 :INSTALL_DEPS
@@ -47,7 +60,9 @@ GOTO END
 
 :ERROR_NO_PYTHON
 echo [Error] Python is not found in your PATH.
-echo Please install Python from https://www.python.org/downloads/
+echo Detected commands checked: py -3, python, python3
+echo If Python is installed, enable the py launcher or add python.exe to PATH.
+echo Download: https://www.python.org/downloads/
 pause
 exit /b 1
 
