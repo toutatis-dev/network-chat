@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pytest
+from pathlib import Path
 
 import chat
 
@@ -97,3 +98,23 @@ def test_missing_portalocker_fails_fast(monkeypatch):
 
     with pytest.raises(SystemExit, match="Missing dependency 'portalocker'"):
         app.ensure_locking_dependency()
+
+
+def test_sanitize_presence_id_blocks_path_tokens():
+    app = chat.ChatApp.__new__(chat.ChatApp)
+
+    assert app.sanitize_presence_id("../Shared_chat.txt") == "_Shared_chat.txt"
+    assert app.sanitize_presence_id(r"..\Shared_chat.txt") == "_Shared_chat.txt"
+    assert app.sanitize_presence_id("   ") == "Anonymous"
+
+
+def test_get_presence_path_stays_within_presence_dir(tmp_path):
+    app = chat.ChatApp.__new__(chat.ChatApp)
+    app.presence_dir = str(tmp_path / "presence")
+    app.presence_file_id = app.sanitize_presence_id("../escape")
+
+    path = app.get_presence_path()
+
+    base = Path(app.presence_dir).resolve()
+    assert path.parent == base
+    assert str(path).startswith(str(base))

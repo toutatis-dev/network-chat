@@ -4,9 +4,11 @@ import json
 import asyncio
 import string
 import random
+import re
 from typing import Any
 from datetime import datetime
 from threading import Thread
+from pathlib import Path
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -44,6 +46,7 @@ LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_MAX_ATTEMPTS = 20
 LOCK_BACKOFF_BASE_SECONDS = 0.05
 LOCK_BACKOFF_MAX_SECONDS = 0.5
+MAX_PRESENCE_ID_LENGTH = 64
 
 # Themes Configuration
 THEMES = {
@@ -171,6 +174,7 @@ class ChatApp:
     def __init__(self):
         self.ensure_locking_dependency()
         self.name = "Anonymous"
+        self.presence_file_id = self.sanitize_presence_id(self.name)
         self.color = "white"
         self.status = ""
         self.running = True
@@ -309,6 +313,19 @@ class ChatApp:
                 drives.append(f"{letter}:\\")
         return drives
 
+    def sanitize_presence_id(self, name: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip(" .")
+        if not cleaned or not re.search(r"[A-Za-z0-9]", cleaned):
+            return "Anonymous"
+        return cleaned[:MAX_PRESENCE_ID_LENGTH]
+
+    def get_presence_path(self) -> Path:
+        base = Path(self.presence_dir).resolve()
+        target = (base / self.presence_file_id).resolve()
+        if target.parent != base:
+            raise ValueError("Invalid username for presence path.")
+        return target
+
     def prompt_for_path(self) -> str:
         print("--- Huddle Chat Setup ---")
         print("Available Drives detected:")
@@ -372,7 +389,10 @@ class ChatApp:
                     with open(path, "r") as f:
                         data = json.load(f)
                         if isinstance(data, dict):
-                            online[filename] = data
+                            display_name = (
+                                str(data.get("name", filename)).strip() or filename
+                            )
+                            online[display_name] = data
                         else:
                             online[filename] = {"color": "white", "status": ""}
                 else:
@@ -385,10 +405,15 @@ class ChatApp:
         return online
 
     def heartbeat(self) -> None:
-        presence_path = os.path.join(self.presence_dir, self.name)
+        try:
+            presence_path = self.get_presence_path()
+        except ValueError:
+            return
+
         while self.running:
             try:
                 data = {
+                    "name": self.name,
                     "color": self.color,
                     "last_seen": time.time(),
                     "status": self.status,
@@ -531,8 +556,9 @@ class ChatApp:
 
     def force_heartbeat(self) -> None:
         try:
-            presence_path = os.path.join(self.presence_dir, self.name)
+            presence_path = self.get_presence_path()
             data = {
+                "name": self.name,
                 "color": self.color,
                 "last_seen": time.time(),
                 "status": self.status,
@@ -579,6 +605,7 @@ class ChatApp:
             self.name = user_input if user_input else saved_name
         else:
             self.name = input("Enter your name: ").strip() or "Anonymous"
+        self.presence_file_id = self.sanitize_presence_id(self.name)
 
         # Save config immediately to persist the name (or update it)
         self.save_config()
