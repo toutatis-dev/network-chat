@@ -21,8 +21,13 @@ class CommandRegistry:
             "/aiproviders": self.command_aiproviders,
             "/aiconfig": self.command_aiconfig,
             "/ai": self.command_ai,
+            "/ask": self.command_ask,
             "/share": self.command_share,
+            "/agent": self.command_agent,
             "/memory": self.command_memory,
+            "/actions": self.command_actions,
+            "/approve": self.command_approve,
+            "/deny": self.command_deny,
             "/search": self.command_search,
             "/next": self.command_next,
             "/prev": self.command_prev,
@@ -78,11 +83,40 @@ class CommandRegistry:
     def command_ai(self, args: str) -> None:
         self.app.handle_ai_command(args)
 
+    def command_ask(self, args: str) -> None:
+        self.app.handle_ai_command(args)
+
     def command_share(self, args: str) -> None:
         self.app.handle_share_command(args)
 
+    def command_agent(self, args: str) -> None:
+        self.app.handle_agent_command(args)
+
     def command_memory(self, args: str) -> None:
         self.app.handle_memory_command(args)
+
+    def command_actions(self, _args: str) -> None:
+        self.app.append_system_message(self.app.get_pending_actions_text())
+
+    def command_approve(self, args: str) -> None:
+        action_id = args.strip()
+        if not action_id:
+            self.app.append_system_message("Usage: /approve <action-id>")
+            return
+        ok, msg = self.app.decide_action(action_id, "approved")
+        self.app.append_system_message(msg)
+        if ok:
+            self.app.refresh_output_from_events()
+
+    def command_deny(self, args: str) -> None:
+        action_id = args.strip()
+        if not action_id:
+            self.app.append_system_message("Usage: /deny <action-id>")
+            return
+        ok, msg = self.app.decide_action(action_id, "denied")
+        self.app.append_system_message(msg)
+        if ok:
+            self.app.refresh_output_from_events()
 
     def command_search(self, args: str) -> None:
         query = args.strip()

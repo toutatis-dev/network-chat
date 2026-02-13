@@ -52,23 +52,46 @@ class MemoryService:
         self.app.memory_draft_mode = "none"
         self.app.memory_draft = None
 
-    def load_memory_entries(self) -> list[dict[str, Any]]:
+    def normalize_memory_scopes(self, scopes: list[str] | None) -> list[str]:
+        if not scopes:
+            return ["team"]
+        normalized: list[str] = []
+        for value in scopes:
+            candidate = str(value).strip().lower()
+            if candidate in {"private", "repo", "team"} and candidate not in normalized:
+                normalized.append(candidate)
+        return normalized or ["team"]
+
+    def get_memory_file_for_scope(self, scope: str):
+        if scope == "private":
+            return self.app.get_private_memory_file()
+        if scope == "repo":
+            return self.app.get_repo_memory_file()
+        return self.app.get_memory_file()
+
+    def load_memory_entries(
+        self, scopes: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         self.app.ensure_memory_paths()
+        normalized_scopes = self.normalize_memory_scopes(scopes)
         entries: list[dict[str, Any]] = []
-        try:
-            with open(self.app.get_memory_file(), "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(data, dict):
-                        entries.append(data)
-        except OSError as exc:
-            logger.warning("Failed reading memory entries: %s", exc)
+        for scope in normalized_scopes:
+            path = self.get_memory_file_for_scope(scope)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(data, dict):
+                            data.setdefault("scope", scope)
+                            entries.append(data)
+            except OSError as exc:
+                logger.warning("Failed reading memory entries from %s: %s", path, exc)
         return entries
 
     def normalize_text_tokens(self, text: str) -> set[str]:
@@ -207,12 +230,20 @@ class MemoryService:
         return ranked_ids
 
     def select_memory_for_prompt(
-        self, prompt: str, provider_cfg: dict[str, str]
+        self,
+        prompt: str,
+        provider_cfg: dict[str, str],
+        scopes: list[str] | None = None,
+        rerank_provider_cfg: dict[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         used_override, override_entries = self._call_instance_override(
             "load_memory_entries"
         )
-        entries = override_entries if used_override else self.load_memory_entries()
+        entries = (
+            override_entries
+            if used_override
+            else self.load_memory_entries(scopes=scopes)
+        )
         if not entries:
             return [], None
 
@@ -225,7 +256,7 @@ class MemoryService:
             return [], None
 
         ranked_ids = self.rerank_memory_candidates_with_ai(
-            provider_cfg=provider_cfg,
+            provider_cfg=rerank_provider_cfg or provider_cfg,
             prompt=prompt,
             candidates=prefiltered,
         )
@@ -292,7 +323,11 @@ class MemoryService:
         used_override, override_entries = self._call_instance_override(
             "load_memory_entries"
         )
-        entries = override_entries if used_override else self.load_memory_entries()
+        entries = (
+            override_entries
+            if used_override
+            else self.load_memory_entries(scopes=["private", "repo", "team"])
+        )
         scored: list[tuple[float, dict[str, Any]]] = []
         for entry in entries:
             if not isinstance(entry, dict):
@@ -333,13 +368,15 @@ class MemoryService:
             lines.append(f"{mem_id} [{topic}] {summary}")
         self.app.append_system_message("\n".join(lines))
 
-    def write_memory_entry(self, entry: dict[str, Any]) -> bool:
+    def write_memory_entry(self, entry: dict[str, Any], scope: str = "team") -> bool:
         self.app.ensure_locking_dependency()
         import chat
 
         assert chat.portalocker is not None
         self.app.ensure_memory_paths()
-        memory_file = self.app.get_memory_file()
+        normalized_scope = self.normalize_memory_scopes([scope])[0]
+        memory_file = self.get_memory_file_for_scope(normalized_scope)
+        entry.setdefault("scope", normalized_scope)
         row = json.dumps(entry, ensure_ascii=True)
         max_attempts = int(getattr(chat, "LOCK_MAX_ATTEMPTS", LOCK_MAX_ATTEMPTS))
         for attempt in range(max_attempts):
@@ -456,6 +493,7 @@ class MemoryService:
                 source_event.get("request_id", source_event.get("ts", ""))
             ),
             "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
+            "scope": "team",
         }
         return draft, None
 
@@ -472,7 +510,8 @@ class MemoryService:
             f"Summary: {draft.get('summary', '')}\n"
             f"Topic: {draft.get('topic', '')}\n"
             f"Confidence: {draft.get('confidence', '')}\n"
-            f"Source: {draft.get('source', '')}"
+            f"Source: {draft.get('source', '')}\n"
+            f"Scope: {draft.get('scope', 'team')}"
         )
         self.app.append_system_message(preview)
         if self.app.memory_draft_mode == "confirm":
@@ -514,12 +553,17 @@ class MemoryService:
             "room": str(draft.get("room", self.app.current_room)),
             "origin_event_ref": str(draft.get("origin_event_ref", "")),
             "tags": list(draft.get("tags", [])),
+            "scope": str(draft.get("scope", "team")).strip().lower() or "team",
         }
         self.maybe_warn_memory_duplicates(entry)
         used_override, write_ok = self._call_instance_override(
             "write_memory_entry", entry
         )
-        if not (bool(write_ok) if used_override else self.write_memory_entry(entry)):
+        if not (
+            bool(write_ok)
+            if used_override
+            else self.write_memory_entry(entry, scope=str(entry.get("scope", "team")))
+        ):
             self.app.append_system_message("Failed to write shared memory entry.")
             return
         self.app.append_system_message(f"Memory saved: {entry['id']}")
@@ -538,7 +582,7 @@ class MemoryService:
         if lowered == "n":
             self.app.memory_draft_mode = "edit"
             self.app.append_system_message(
-                "Draft rejected. Edit fields: /memory edit summary|topic|confidence|source <value>. "
+                "Draft rejected. Edit fields: /memory edit summary|topic|confidence|source|scope <value>. "
                 "Then use /memory confirm or /memory cancel."
             )
             return True
@@ -550,7 +594,8 @@ class MemoryService:
         if not trimmed or trimmed.lower() == "help":
             self.app.append_system_message(
                 "Memory commands: /memory add, /memory confirm, /memory cancel, "
-                "/memory show-draft, /memory edit <field> <value>, /memory list [N], /memory search <text>"
+                "/memory show-draft, /memory edit <field> <value>, /memory list [N], /memory search <text>, "
+                "/memory scope <private|repo|team>"
             )
             return
 
@@ -606,14 +651,14 @@ class MemoryService:
                 return
             if len(tokens) < 3:
                 self.app.append_system_message(
-                    "Usage: /memory edit <summary|topic|confidence|source> <value>"
+                    "Usage: /memory edit <summary|topic|confidence|source|scope> <value>"
                 )
                 return
             field = tokens[1].strip().lower()
             value = " ".join(tokens[2:]).strip()
-            if field not in {"summary", "topic", "confidence", "source"}:
+            if field not in {"summary", "topic", "confidence", "source", "scope"}:
                 self.app.append_system_message(
-                    "Editable fields: summary, topic, confidence, source."
+                    "Editable fields: summary, topic, confidence, source, scope."
                 )
                 return
             if field == "confidence":
@@ -623,8 +668,32 @@ class MemoryService:
                         "Confidence must be low, med, or high."
                     )
                     return
+            if field == "scope":
+                value = self.normalize_memory_scopes([value])[0]
             self.app.memory_draft[field] = value
             self.app.append_system_message(f"Updated draft {field}.")
+            self.show_memory_draft_preview()
+            return
+
+        if action == "scope":
+            if not self.app.memory_draft_active or not isinstance(
+                self.app.memory_draft, dict
+            ):
+                self.app.append_system_message(
+                    "No active memory draft. Run /memory add first."
+                )
+                return
+            if len(tokens) < 2:
+                self.app.append_system_message(
+                    "Usage: /memory scope <private|repo|team>"
+                )
+                return
+            self.app.memory_draft["scope"] = self.normalize_memory_scopes([tokens[1]])[
+                0
+            ]
+            self.app.append_system_message(
+                f"Updated draft scope to {self.app.memory_draft['scope']}."
+            )
             self.show_memory_draft_preview()
             return
 

@@ -64,6 +64,7 @@ class SlashCompleter(Completer):
                     "--model",
                     "--private",
                     "--no-memory",
+                    "--memory-scope",
                 ],
                 {
                     "status": "Show active AI request",
@@ -72,6 +73,7 @@ class SlashCompleter(Completer):
                     "--model": "Override model for this call",
                     "--private": "Run AI privately in ai-dm",
                     "--no-memory": "Disable shared memory for this call",
+                    "--memory-scope": "Limit memory scopes: private,repo,team",
                 },
             )
 
@@ -89,6 +91,8 @@ class SlashCompleter(Completer):
                     "openai", []
                 )
             return self._yield_candidates(current, hints)
+        if prev == "--memory-scope":
+            return self._yield_candidates(current, ["private", "repo", "team"])
 
         if len(tokens) == 2 and not trailing_space:
             return self._yield_candidates(
@@ -100,6 +104,7 @@ class SlashCompleter(Completer):
                     "--model",
                     "--private",
                     "--no-memory",
+                    "--memory-scope",
                 ],
                 {
                     "status": "Show active AI request",
@@ -108,6 +113,7 @@ class SlashCompleter(Completer):
                     "--model": "Override model for this call",
                     "--private": "Run AI privately in ai-dm",
                     "--no-memory": "Disable shared memory for this call",
+                    "--memory-scope": "Limit memory scopes: private,repo,team",
                 },
             )
         return []
@@ -171,6 +177,7 @@ class SlashCompleter(Completer):
             "show-draft",
             "list",
             "search",
+            "scope",
             "help",
         ]
         if len(tokens) == 1 and not trailing_space:
@@ -188,6 +195,33 @@ class SlashCompleter(Completer):
             )
         if len(values) == 3 and values[1] == "edit" and values[2] == "confidence":
             return self._yield_candidates(current, ["low", "med", "high"])
+        if len(values) == 2 and values[1] == "scope":
+            return self._yield_candidates(current, ["private", "repo", "team"])
+        if len(values) == 3 and values[1] == "edit" and values[2] == "scope":
+            return self._yield_candidates(current, ["private", "repo", "team"])
+        return []
+
+    def _complete_agent_command(self, text: str):
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        subcommands = ["status", "list", "use", "show", "memory", "route"]
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/agent"])
+        if len(tokens) == 1 and trailing_space:
+            return self._yield_candidates("", subcommands)
+
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, subcommands)
+        if len(values) == 2 and values[1] == "memory":
+            return self._yield_candidates(current, ["private,repo,team", "team"])
+        if len(values) == 2 and values[1] == "route":
+            return self._yield_candidates(
+                current, ["chat_general", "code_analysis", "memory_rerank"]
+            )
+        if len(values) == 3 and values[1] == "route":
+            return self._yield_candidates(current, self._provider_names())
         return []
 
     def get_completions(self, document, complete_event):
@@ -198,6 +232,10 @@ class SlashCompleter(Completer):
 
         if re.match(r"^/memory(\s|$)", text):
             yield from self._complete_memory_command(text)
+            return
+
+        if re.match(r"^/agent(\s|$)", text):
+            yield from self._complete_agent_command(text)
             return
 
         if re.match(r"^/ai(\s|$)", text):
@@ -236,10 +274,15 @@ class SlashCompleter(Completer):
                 ("/prev", "Jump to previous search match"),
                 ("/clearsearch", "Clear active search"),
                 ("/ai", "Ask AI in current room or private mode"),
+                ("/ask", "Alias for /ai"),
                 ("/aiproviders", "List configured AI providers"),
                 ("/aiconfig", "Manage local AI config"),
+                ("/agent", "Show/update agent profile and routing"),
                 ("/memory", "Draft and manage shared memory entries"),
                 ("/share", "Share AI DM messages into a room"),
+                ("/actions", "Show pending approval actions"),
+                ("/approve", "Approve an action by id"),
+                ("/deny", "Deny an action by id"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
             ]

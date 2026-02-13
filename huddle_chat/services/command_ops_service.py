@@ -164,3 +164,147 @@ class CommandOpsService:
         self.app.append_system_message(
             f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
         )
+
+    def _parse_scopes(self, raw: str) -> list[str]:
+        scopes: list[str] = []
+        for part in raw.replace(",", " ").split():
+            candidate = part.strip().lower()
+            if candidate in {"private", "repo", "team"} and candidate not in scopes:
+                scopes.append(candidate)
+        return scopes
+
+    def handle_agent_command(self, args: str) -> None:
+        trimmed = args.strip()
+        if not trimmed or trimmed.lower() in {"status", "help"}:
+            self.app.append_system_message(
+                "Agent commands: /agent status, /agent list, /agent use <id>, "
+                "/agent show [id], /agent memory <private,repo,team>, "
+                "/agent route <task> <provider> <model>"
+            )
+            self.app.append_system_message(self.app.get_agent_status_text())
+            return
+
+        try:
+            tokens = shlex.split(trimmed)
+        except ValueError:
+            self.app.append_system_message("Invalid /agent syntax. Check quotes.")
+            return
+        if not tokens:
+            self.app.append_system_message("Usage: /agent status")
+            return
+
+        action = tokens[0].strip().lower()
+        if action == "list":
+            profiles = self.app.agent_service.list_profiles()
+            active_id = self.app.agent_service.get_active_profile_id()
+            if not profiles:
+                self.app.append_system_message("No agent profiles found.")
+                return
+            lines = ["Agent profiles:"]
+            for profile in profiles:
+                profile_id = str(profile.get("id", "")).strip()
+                marker = "*" if profile_id == active_id else " "
+                name = str(profile.get("name", "")).strip()
+                lines.append(
+                    f"{marker} {profile_id} ({name or 'unnamed'}) v{profile.get('version', 1)}"
+                )
+            self.app.append_system_message("\n".join(lines))
+            return
+
+        if action == "use":
+            if len(tokens) < 2:
+                self.app.append_system_message("Usage: /agent use <profile-id>")
+                return
+            ok, msg = self.app.agent_service.set_active_profile(tokens[1])
+            self.app.append_system_message(msg)
+            return
+
+        if action == "show":
+            profile_id = (
+                tokens[1]
+                if len(tokens) >= 2
+                else self.app.agent_service.get_active_profile_id()
+            )
+            profile = self.app.agent_service.get_profile(profile_id)
+            if profile is None:
+                self.app.append_system_message(
+                    f"Unknown agent profile '{self.app.sanitize_agent_id(profile_id)}'."
+                )
+                return
+            memory_policy = profile.get("memory_policy", {})
+            scopes: list[str] = []
+            if isinstance(memory_policy, dict):
+                raw_scopes = memory_policy.get("scopes", [])
+                if isinstance(raw_scopes, list):
+                    scopes = [str(item) for item in raw_scopes]
+            routes = profile.get("routing_policy", {})
+            route_count = 0
+            if isinstance(routes, dict):
+                route_map = routes.get("routes", {})
+                if isinstance(route_map, dict):
+                    route_count = len(route_map)
+            self.app.append_system_message(
+                f"Agent profile {profile.get('id', '?')}: "
+                f"name={profile.get('name', '')}, "
+                f"memory_scopes={','.join(scopes) if scopes else 'team'}, "
+                f"routes={route_count}, version={profile.get('version', 1)}"
+            )
+            return
+
+        if action == "memory":
+            if len(tokens) < 2:
+                self.app.append_system_message(
+                    "Usage: /agent memory <private,repo,team>"
+                )
+                return
+            scopes = self._parse_scopes(" ".join(tokens[1:]))
+            if not scopes:
+                self.app.append_system_message(
+                    "Invalid scopes. Use any of: private, repo, team."
+                )
+                return
+            active = self.app.agent_service.get_active_profile()
+            active["memory_policy"] = {"scopes": scopes}
+            ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
+            if not ok:
+                self.app.append_system_message(msg)
+                return
+            self.app.append_system_message(
+                f"Updated memory scopes: {', '.join(scopes)}"
+            )
+            return
+
+        if action == "route":
+            if len(tokens) < 4:
+                self.app.append_system_message(
+                    "Usage: /agent route <task-class> <provider> <model>"
+                )
+                return
+            task_class = tokens[1].strip()
+            provider = tokens[2].strip().lower()
+            model = tokens[3].strip()
+            if provider not in {"gemini", "openai"}:
+                self.app.append_system_message(
+                    "Unknown provider. Use gemini or openai."
+                )
+                return
+            active = self.app.agent_service.get_active_profile()
+            routing_policy = active.get("routing_policy", {})
+            if not isinstance(routing_policy, dict):
+                routing_policy = {}
+            routes = routing_policy.get("routes", {})
+            if not isinstance(routes, dict):
+                routes = {}
+            routes[task_class] = {"provider": provider, "model": model}
+            routing_policy["routes"] = routes
+            active["routing_policy"] = routing_policy
+            ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
+            if not ok:
+                self.app.append_system_message(msg)
+                return
+            self.app.append_system_message(
+                f"Route set: {task_class} -> {provider}:{model}"
+            )
+            return
+
+        self.app.append_system_message("Unknown /agent command. Use /agent help.")

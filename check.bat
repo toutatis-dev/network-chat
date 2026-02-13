@@ -65,9 +65,10 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 4. Testing (Pytest) ---
-set TMP_ROOT=%TEMP%\network-chat-pytest
+set TMP_ROOT=%CD%\.pytest_temp
 set PYTEST_BASE=%TMP_ROOT%\basetemp
 set PYTEST_WORK=%TMP_ROOT%\tmp
+if exist "%TMP_ROOT%" rmdir /s /q "%TMP_ROOT%" >nul 2>&1
 if not exist "%TMP_ROOT%" mkdir "%TMP_ROOT%"
 if not exist "%PYTEST_BASE%" mkdir "%PYTEST_BASE%"
 if not exist "%PYTEST_WORK%" mkdir "%PYTEST_WORK%"

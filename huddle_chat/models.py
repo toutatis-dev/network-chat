@@ -39,6 +39,68 @@ class ParsedAIArgs(TypedDict, total=False):
     is_private: bool
     disable_memory: bool
     prompt: str
+    memory_scope_override: list[str]
+
+
+class ToolPolicy(TypedDict, total=False):
+    mode: str
+    require_approval: bool
+    allowed_tools: list[str]
+
+
+class MemoryPolicy(TypedDict, total=False):
+    scopes: list[str]
+
+
+class RoutingPolicy(TypedDict, total=False):
+    routes: dict[str, dict[str, str]]
+
+
+class AgentProfile(TypedDict, total=False):
+    id: str
+    name: str
+    description: str
+    system_prompt: str
+    tool_policy: ToolPolicy
+    memory_policy: MemoryPolicy
+    routing_policy: RoutingPolicy
+    created_by: str
+    updated_by: str
+    updated_at: str
+    version: int
+
+
+class ResolvedRoute(TypedDict):
+    provider: str
+    model: str
+    api_key: str
+    reason: str
+
+
+class ToolActionRequest(TypedDict):
+    action_id: str
+    ts: str
+    user: str
+    agent_profile: str
+    tool: str
+    summary: str
+    command_preview: str
+    risk_level: str
+    status: str
+
+
+class ToolActionDecision(TypedDict):
+    action_id: str
+    ts: str
+    user: str
+    decision: str
+
+
+class ToolActionResult(TypedDict):
+    action_id: str
+    ts: str
+    result: str
+    output_preview: str
 
 
 JsonDict = dict[str, Any]

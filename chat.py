@@ -29,6 +29,10 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.layout.menus import CompletionsMenu
 
 from huddle_chat.constants import (
+    AGENT_ACTIONS_FILE,
+    AGENT_AUDIT_FILE,
+    AGENT_PROFILES_DIR_NAME,
+    AGENTS_DIR_NAME,
     AI_CONFIG_FILE,
     AI_DM_ROOM,
     AI_HTTP_TIMEOUT_SECONDS,
@@ -39,21 +43,27 @@ from huddle_chat.constants import (
     DEFAULT_ROOM,
     EVENT_SCHEMA_VERSION,
     LOCAL_CHAT_ROOT,
+    LOCAL_MEMORY_ROOT,
     LOCAL_ROOMS_ROOT,
     LOCK_MAX_ATTEMPTS as DEFAULT_LOCK_MAX_ATTEMPTS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
     MEMORY_DIR_NAME,
     MEMORY_GLOBAL_FILE,
+    MEMORY_PRIVATE_FILE,
+    MEMORY_REPO_FILE,
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
     THEMES,
 )
 from huddle_chat.commands.registry import CommandRegistry
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
 from huddle_chat.services import (
+    ActionService,
     AIService,
+    AgentService,
     CommandOpsService,
     MemoryService,
+    RoutingService,
     RuntimeService,
     StorageService,
 )
@@ -154,9 +164,15 @@ class ChatApp:
         self.memory_draft_active = False
         self.memory_draft_mode = "none"
         self.memory_draft: dict[str, Any] | None = None
+        self.agent_draft_active = False
+        self.agent_draft: dict[str, Any] | None = None
+        self.pending_actions: dict[str, dict[str, Any]] = {}
         self.storage_service = StorageService(self)
         self.memory_service = MemoryService(self)
         self.ai_service = AIService(self)
+        self.agent_service = AgentService(self)
+        self.routing_service = RoutingService(self)
+        self.action_service = ActionService(self)
         self.command_ops_service = CommandOpsService(self)
         self.runtime_service = RuntimeService(self)
         self.ai_provider_clients: dict[str, ProviderClient] = {
@@ -175,6 +191,9 @@ class ChatApp:
             config_data.get("room", DEFAULT_ROOM)
         )
         self.client_id = self.normalize_client_id(config_data.get("client_id"))
+        self.active_agent_profile_id = self.sanitize_agent_id(
+            config_data.get("agent_profile", "default")
+        )
         self.presence_file_id = self.client_id
 
         if not self.base_dir or not os.path.exists(self.base_dir):
@@ -185,7 +204,10 @@ class ChatApp:
         self.ensure_paths()
         self.ensure_local_paths()
         self.ensure_memory_paths()
+        self.ensure_agent_paths()
         self.update_room_paths()
+        self.agent_service.ensure_default_profile()
+        self.action_service.load_actions_from_audit()
 
         legacy_path = os.path.join(self.base_dir, "Shared_chat.txt")
         if os.path.exists(legacy_path):
@@ -301,6 +323,9 @@ class ChatApp:
                     "username": self.name,
                     "room": self.current_room,
                     "client_id": self.client_id,
+                    "agent_profile": getattr(
+                        self, "active_agent_profile_id", "default"
+                    ),
                 },
                 f,
             )
@@ -340,6 +365,11 @@ class ChatApp:
         cleaned = cleaned.strip("-_")
         return cleaned or DEFAULT_ROOM
 
+    def sanitize_agent_id(self, value: Any) -> str:
+        cleaned = re.sub(r"[^a-z0-9_-]+", "-", str(value).strip().lower())
+        cleaned = cleaned.strip("-_")
+        return cleaned or "default"
+
     def generate_client_id(self) -> str:
         return uuid4().hex[:CLIENT_ID_LENGTH]
 
@@ -375,6 +405,9 @@ class ChatApp:
             local_room_dir = self.get_local_room_dir(AI_DM_ROOM)
             os.makedirs(local_room_dir, exist_ok=True)
             self.get_local_message_file(AI_DM_ROOM).touch(exist_ok=True)
+            os.makedirs(Path(LOCAL_MEMORY_ROOT).resolve(), exist_ok=True)
+            self.get_private_memory_file().touch(exist_ok=True)
+            self.get_repo_memory_file().touch(exist_ok=True)
         except OSError as exc:
             logger.warning("Failed ensuring local AI paths: %s", exc)
 
@@ -384,13 +417,58 @@ class ChatApp:
     def get_memory_file(self) -> Path:
         return self.get_memory_dir() / MEMORY_GLOBAL_FILE
 
+    def get_private_memory_file(self) -> Path:
+        return Path(LOCAL_MEMORY_ROOT).resolve() / MEMORY_PRIVATE_FILE
+
+    def get_repo_memory_file(self) -> Path:
+        return Path(LOCAL_MEMORY_ROOT).resolve() / MEMORY_REPO_FILE
+
     def ensure_memory_paths(self) -> None:
         try:
             memory_dir = self.get_memory_dir()
             os.makedirs(memory_dir, exist_ok=True)
             self.get_memory_file().touch(exist_ok=True)
+            os.makedirs(Path(LOCAL_MEMORY_ROOT).resolve(), exist_ok=True)
+            self.get_private_memory_file().touch(exist_ok=True)
+            self.get_repo_memory_file().touch(exist_ok=True)
         except OSError as exc:
             logger.warning("Failed ensuring memory paths: %s", exc)
+
+    def get_agents_dir(self) -> Path:
+        return (Path(self.base_dir) / AGENTS_DIR_NAME).resolve()
+
+    def get_agent_profiles_dir(self) -> Path:
+        return (self.get_agents_dir() / AGENT_PROFILES_DIR_NAME).resolve()
+
+    def get_agent_profile_path(self, profile_id: str) -> Path:
+        safe_id = self.sanitize_agent_id(profile_id)
+        base = self.get_agent_profiles_dir().resolve()
+        target = (base / f"{safe_id}.json").resolve()
+        if target.parent != base:
+            raise ValueError("Invalid agent profile path.")
+        return target
+
+    def get_agent_audit_file(self) -> Path:
+        return self.get_agents_dir() / AGENT_AUDIT_FILE
+
+    def get_actions_audit_file(self) -> Path:
+        return self.get_agents_dir() / AGENT_ACTIONS_FILE
+
+    def ensure_agent_paths(self) -> None:
+        try:
+            os.makedirs(self.get_agent_profiles_dir(), exist_ok=True)
+            self.get_agent_audit_file().touch(exist_ok=True)
+            self.get_actions_audit_file().touch(exist_ok=True)
+        except OSError as exc:
+            logger.warning("Failed ensuring agent paths: %s", exc)
+
+    def append_jsonl_row(self, path: Path, row: dict[str, Any]) -> bool:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+            return True
+        except OSError:
+            return False
 
     def get_default_ai_config(self) -> dict[str, Any]:
         return {
@@ -979,6 +1057,12 @@ class ChatApp:
             self.memory_service = MemoryService(self)
         if not hasattr(self, "ai_service"):
             self.ai_service = AIService(self)
+        if not hasattr(self, "agent_service"):
+            self.agent_service = AgentService(self)
+        if not hasattr(self, "routing_service"):
+            self.routing_service = RoutingService(self)
+        if not hasattr(self, "action_service"):
+            self.action_service = ActionService(self)
         if not hasattr(self, "command_ops_service"):
             self.command_ops_service = CommandOpsService(self)
         if not hasattr(self, "runtime_service"):
@@ -988,6 +1072,10 @@ class ChatApp:
                 "gemini": GeminiClient(),
                 "openai": OpenAIClient(),
             }
+        if not hasattr(self, "pending_actions"):
+            self.pending_actions = {}
+        if not hasattr(self, "active_agent_profile_id"):
+            self.active_agent_profile_id = "default"
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1101,6 +1189,56 @@ class ChatApp:
         self.ensure_services_initialized()
         self.command_ops_service.handle_share_command(args)
 
+    def get_active_agent_profile(self) -> dict[str, Any]:
+        self.ensure_services_initialized()
+        return self.agent_service.get_active_profile()
+
+    def get_agent_status_text(self) -> str:
+        self.ensure_services_initialized()
+        return self.agent_service.build_status_text()
+
+    def handle_agent_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.command_ops_service.handle_agent_command(args)
+
+    def resolve_route(
+        self,
+        *,
+        task_class: str,
+        provider_override: str | None,
+        model_override: str | None,
+    ) -> tuple[dict[str, str] | None, str | None]:
+        self.ensure_services_initialized()
+        return self.routing_service.resolve_route(
+            task_class=task_class,
+            provider_override=provider_override,
+            model_override=model_override,
+        )
+
+    def create_pending_action(
+        self,
+        *,
+        tool: str,
+        summary: str,
+        command_preview: str,
+        risk_level: str = "med",
+    ) -> str:
+        self.ensure_services_initialized()
+        return self.action_service.create_pending_action(
+            tool=tool,
+            summary=summary,
+            command_preview=command_preview,
+            risk_level=risk_level,
+        )
+
+    def decide_action(self, action_id: str, decision: str) -> tuple[bool, str]:
+        self.ensure_services_initialized()
+        return self.action_service.decide_action(action_id, decision)
+
+    def get_pending_actions_text(self) -> str:
+        self.ensure_services_initialized()
+        return self.action_service.format_pending_actions()
+
     def ensure_memory_state_initialized(self) -> None:
         self.ensure_services_initialized()
         self.memory_service.ensure_memory_state_initialized()
@@ -1109,9 +1247,11 @@ class ChatApp:
         self.ensure_services_initialized()
         self.memory_service.clear_memory_draft()
 
-    def load_memory_entries(self) -> list[dict[str, Any]]:
+    def load_memory_entries(
+        self, scopes: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         self.ensure_services_initialized()
-        return self.memory_service.load_memory_entries()
+        return self.memory_service.load_memory_entries(scopes=scopes)
 
     def normalize_text_tokens(self, text: str) -> set[str]:
         self.ensure_services_initialized()
@@ -1141,10 +1281,19 @@ class ChatApp:
         )
 
     def select_memory_for_prompt(
-        self, prompt: str, provider_cfg: dict[str, str]
+        self,
+        prompt: str,
+        provider_cfg: dict[str, str],
+        scopes: list[str] | None = None,
+        rerank_provider_cfg: dict[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         self.ensure_services_initialized()
-        return self.memory_service.select_memory_for_prompt(prompt, provider_cfg)
+        return self.memory_service.select_memory_for_prompt(
+            prompt,
+            provider_cfg,
+            scopes=scopes,
+            rerank_provider_cfg=rerank_provider_cfg,
+        )
 
     def build_memory_context_block(self, selected: list[dict[str, Any]]) -> str:
         self.ensure_services_initialized()
@@ -1164,9 +1313,9 @@ class ChatApp:
         self.ensure_services_initialized()
         self.memory_service.maybe_warn_memory_duplicates(draft)
 
-    def write_memory_entry(self, entry: dict[str, Any]) -> bool:
+    def write_memory_entry(self, entry: dict[str, Any], scope: str = "team") -> bool:
         self.ensure_services_initialized()
-        return self.memory_service.write_memory_entry(entry)
+        return self.memory_service.write_memory_entry(entry, scope=scope)
 
     def get_last_ai_response_event(self) -> dict[str, Any] | None:
         self.ensure_services_initialized()

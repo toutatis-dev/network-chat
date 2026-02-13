@@ -5,6 +5,8 @@ chat_config.json
 .local_chat/
 .pytest_cache/
 .pytest_tmp/
+.pytest_temp/
+.pytest_temp_work/
 .mypy_cache/
 .tmp/
 .tmp*/

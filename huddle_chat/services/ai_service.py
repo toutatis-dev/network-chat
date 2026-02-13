@@ -23,6 +23,7 @@ class AIService:
         model_override: str | None = None
         is_private = False
         disable_memory = False
+        memory_scope_override: list[str] = []
         prompt_parts: list[str] = []
         i = 0
         while i < len(tokens):
@@ -47,6 +48,22 @@ class AIService:
                 disable_memory = True
                 i += 1
                 continue
+            if token == "--memory-scope":
+                if i + 1 >= len(tokens):
+                    return (
+                        {},
+                        "Usage: /ai --memory-scope <private|repo|team[,..]> <prompt>",
+                    )
+                raw_scopes = tokens[i + 1]
+                for part in raw_scopes.replace(",", " ").split():
+                    scope = part.strip().lower()
+                    if (
+                        scope in {"private", "repo", "team"}
+                        and scope not in memory_scope_override
+                    ):
+                        memory_scope_override.append(scope)
+                i += 2
+                continue
             prompt_parts.append(token)
             i += 1
 
@@ -54,7 +71,8 @@ class AIService:
         if not prompt:
             return (
                 {},
-                "Usage: /ai [--provider <name>] [--model <name>] [--private] [--no-memory] <prompt>",
+                "Usage: /ai [--provider <name>] [--model <name>] [--private] "
+                "[--no-memory] [--memory-scope <private|repo|team[,..]>] <prompt>",
             )
 
         return {
@@ -63,7 +81,24 @@ class AIService:
             "is_private": is_private,
             "disable_memory": disable_memory,
             "prompt": prompt,
+            "memory_scope_override": memory_scope_override,
         }, None
+
+    def classify_task(self, prompt: str) -> str:
+        lowered = prompt.lower()
+        code_markers = [
+            "code",
+            "python",
+            "traceback",
+            "bug",
+            "test",
+            "refactor",
+            "function",
+            "class ",
+        ]
+        if any(marker in lowered for marker in code_markers):
+            return "code_analysis"
+        return "chat_general"
 
     def resolve_ai_provider_config(
         self, provider_override: str | None, model_override: str | None
@@ -159,29 +194,65 @@ class AIService:
             self.app.append_system_message(parse_error)
             return
 
-        provider_cfg, config_error = self.resolve_ai_provider_config(
-            parsed.get("provider_override"),
-            parsed.get("model_override"),
+        task_class = self.classify_task(parsed["prompt"])
+        route, route_error = self.app.resolve_route(
+            task_class=task_class,
+            provider_override=parsed.get("provider_override"),
+            model_override=parsed.get("model_override"),
         )
-        if config_error:
-            self.app.append_system_message(config_error)
+        if route_error:
+            self.app.append_system_message(route_error)
             return
-
-        assert provider_cfg
-        provider = provider_cfg["provider"]
-        model = provider_cfg["model"]
+        assert route is not None
+        provider = route["provider"]
+        model = route["model"]
         prompt = parsed["prompt"]
         disable_memory = bool(parsed.get("disable_memory"))
         is_private = bool(parsed.get("is_private")) or self.app.is_local_room()
         target_room = AI_DM_ROOM if is_private else self.app.current_room
         scope = "private" if is_private else "room"
+        memory_scopes = parsed.get("memory_scope_override") or []
+        if not memory_scopes:
+            profile = self.app.get_active_agent_profile()
+            memory_policy = profile.get("memory_policy", {})
+            if isinstance(memory_policy, dict):
+                configured_scopes = memory_policy.get("scopes", [])
+                if isinstance(configured_scopes, list):
+                    for value in configured_scopes:
+                        candidate = str(value).strip().lower()
+                        if (
+                            candidate in {"private", "repo", "team"}
+                            and candidate not in memory_scopes
+                        ):
+                            memory_scopes.append(candidate)
+        if not memory_scopes:
+            memory_scopes = ["team"]
+
         selected_memory: list[dict[str, Any]] = []
         memory_warning: str | None = None
         effective_prompt = prompt
         if not disable_memory:
+            rerank_route, _ = self.app.resolve_route(
+                task_class="memory_rerank",
+                provider_override=None,
+                model_override=None,
+            )
+            rerank_provider_cfg: dict[str, str] | None = None
+            if rerank_route is not None:
+                rerank_provider_cfg = {
+                    "provider": rerank_route["provider"],
+                    "api_key": rerank_route["api_key"],
+                    "model": rerank_route["model"],
+                }
             selected_memory, memory_warning = self.app.select_memory_for_prompt(
                 prompt=prompt,
-                provider_cfg=provider_cfg,
+                provider_cfg={
+                    "provider": provider,
+                    "api_key": route["api_key"],
+                    "model": model,
+                },
+                scopes=memory_scopes,
+                rerank_provider_cfg=rerank_provider_cfg,
             )
             memory_context = self.app.build_memory_context_block(selected_memory)
             if memory_context:
@@ -227,7 +298,7 @@ class AIService:
             args=(
                 request_id,
                 provider,
-                provider_cfg["api_key"],
+                route["api_key"],
                 model,
                 effective_prompt,
                 target_room,
