@@ -65,11 +65,15 @@ IF %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo --- 4. Testing (Pytest) ---
-set PYTEST_TMP=%CD%\.tmp\pytest
-if not exist "%CD%\.tmp" mkdir "%CD%\.tmp"
-set TMP=%PYTEST_TMP%
-set TEMP=%PYTEST_TMP%
-%PYTHON% -m pytest tests --basetemp "%PYTEST_TMP%"
+set TMP_ROOT=%TEMP%\network-chat-pytest
+set PYTEST_BASE=%TMP_ROOT%\basetemp
+set PYTEST_WORK=%TMP_ROOT%\tmp
+if not exist "%TMP_ROOT%" mkdir "%TMP_ROOT%"
+if not exist "%PYTEST_BASE%" mkdir "%PYTEST_BASE%"
+if not exist "%PYTEST_WORK%" mkdir "%PYTEST_WORK%"
+set TMP=%PYTEST_WORK%
+set TEMP=%PYTEST_WORK%
+%PYTHON% -m pytest tests --basetemp "%PYTEST_BASE%"
 IF %ERRORLEVEL% NEQ 0 (
     echo [Error] Tests failed.
     exit /b 1

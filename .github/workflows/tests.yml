@@ -56,8 +56,11 @@ jobs:
         echo "--- Type Checking ---"
         mypy chat.py huddle_chat
         echo "--- Testing ---"
-        $pytestTmp = Join-Path $pwd ".tmp\\pytest"
-        New-Item -ItemType Directory -Force -Path $pytestTmp | Out-Null
-        $env:TMP = $pytestTmp
-        $env:TEMP = $pytestTmp
-        pytest tests --basetemp $pytestTmp
+        $tmpRoot = Join-Path $env:RUNNER_TEMP "network-chat-pytest"
+        $basetemp = Join-Path $tmpRoot "basetemp"
+        $workTmp = Join-Path $tmpRoot "tmp"
+        New-Item -ItemType Directory -Force -Path $basetemp | Out-Null
+        New-Item -ItemType Directory -Force -Path $workTmp | Out-Null
+        $env:TMP = $workTmp
+        $env:TEMP = $workTmp
+        python -m pytest tests --basetemp $basetemp
