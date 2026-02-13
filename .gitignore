@@ -4,4 +4,8 @@ __pycache__/
 chat_config.json
 .local_chat/
 .pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.tmp/
+.tmp*/
 pytest-cache-files-*
