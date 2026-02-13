@@ -2,3 +2,5 @@ colorama
 rich
 prompt_toolkit
 pytest
+flake8
+black
