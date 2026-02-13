@@ -242,6 +242,7 @@ def test_ai_subcommand_completion_shows_status_and_cancel(app_instance):
     texts = [c.text for c in completions]
     assert "status" in texts
     assert "cancel" in texts
+    assert "--no-memory" in texts
 
 
 def test_aiconfig_set_model_suggests_provider_models(app_instance):

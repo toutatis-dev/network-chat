@@ -67,6 +67,14 @@ def test_parse_ai_args_accepts_flags():
     assert parsed["prompt"] == "summarize this"
 
 
+def test_parse_ai_args_accepts_no_memory_flag():
+    app = chat.ChatApp.__new__(chat.ChatApp)
+    parsed, error = app.parse_ai_args("--no-memory summarize this")
+    assert error is None
+    assert parsed["disable_memory"] is True
+    assert parsed["prompt"] == "summarize this"
+
+
 def test_aiconfig_set_key_updates_local_config(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}
@@ -229,3 +237,193 @@ def test_memory_reject_enters_edit_mode_and_edit_updates_field(tmp_path):
     assert app.memory_draft_mode == "edit"
     app.handle_memory_command("edit summary updated summary")
     assert app.memory_draft["summary"] == "updated summary"
+
+
+def test_ai_uses_memory_and_persists_citations(tmp_path):
+    app = build_ai_app(tmp_path)
+    written: list[tuple[str | None, dict]] = []
+
+    def fake_write(payload, room=None):
+        if isinstance(payload, dict):
+            written.append((room, payload))
+        return True
+
+    prompts: list[str] = []
+
+    def fake_ai_provider(**kwargs):
+        prompt = kwargs["prompt"]
+        prompts.append(prompt)
+        if "Given the user prompt and candidate memory entries" in prompt:
+            return '{"ids":["mem_1"]}'
+        return "grounded answer"
+
+    app.write_to_file = fake_write
+    app.load_memory_entries = lambda: [
+        {
+            "id": "mem_1",
+            "summary": "Use runbook A for deploy rollback.",
+            "topic": "deploy",
+            "confidence": "high",
+            "source": "room:general ts:1",
+            "ts": "2026-01-01T10:00:00",
+        }
+    ]
+    app.call_ai_provider = fake_ai_provider
+    with patch.object(
+        chat,
+        "Thread",
+        side_effect=lambda target, args, daemon: SimpleNamespace(
+            start=lambda: target(*args)
+        ),
+    ):
+        app.handle_ai_command("how do we rollback deploy?")
+
+    assert any("Shared memory context" in prompt for prompt in prompts)
+    assert len(written) == 3
+    assert written[0][1]["type"] == "ai_prompt"
+    assert written[0][1]["memory_ids_used"] == ["mem_1"]
+    assert written[1][1]["type"] == "ai_response"
+    assert written[1][1]["memory_ids_used"] == ["mem_1"]
+    assert written[2][1]["type"] == "system"
+    assert "Memory used: mem_1" in written[2][1]["text"]
+
+
+def test_ai_no_memory_flag_bypasses_memory_retrieval(tmp_path):
+    app = build_ai_app(tmp_path)
+    written: list[tuple[str | None, dict]] = []
+
+    def fake_write(payload, room=None):
+        if isinstance(payload, dict):
+            written.append((room, payload))
+        return True
+
+    prompts: list[str] = []
+
+    def fake_ai_provider(**kwargs):
+        prompts.append(kwargs["prompt"])
+        return "answer"
+
+    app.write_to_file = fake_write
+    app.load_memory_entries = lambda: [
+        {
+            "id": "mem_1",
+            "summary": "Do X",
+            "topic": "ops",
+            "confidence": "high",
+            "source": "room:general ts:1",
+            "ts": "2026-01-01T10:00:00",
+        }
+    ]
+    app.call_ai_provider = fake_ai_provider
+    with patch.object(
+        chat,
+        "Thread",
+        side_effect=lambda target, args, daemon: SimpleNamespace(
+            start=lambda: target(*args)
+        ),
+    ):
+        app.handle_ai_command("--no-memory plain prompt")
+
+    assert len(prompts) == 1
+    assert prompts[0] == "plain prompt"
+    assert "memory_ids_used" not in written[0][1]
+    assert len(written) == 2
+
+
+def test_ai_rerank_failure_falls_back_to_lexical(tmp_path):
+    app = build_ai_app(tmp_path)
+    written: list[tuple[str | None, dict]] = []
+
+    def fake_write(payload, room=None):
+        if isinstance(payload, dict):
+            written.append((room, payload))
+        return True
+
+    def fake_ai_provider(**kwargs):
+        prompt = kwargs["prompt"]
+        if "Given the user prompt and candidate memory entries" in prompt:
+            raise RuntimeError("rerank timeout")
+        return "answer via fallback"
+
+    app.write_to_file = fake_write
+    app.load_memory_entries = lambda: [
+        {
+            "id": "mem_lex",
+            "summary": "Rollback deploy with runbook A.",
+            "topic": "deploy",
+            "confidence": "high",
+            "source": "room:general ts:1",
+            "ts": "2026-01-01T10:00:00",
+        }
+    ]
+    app.call_ai_provider = fake_ai_provider
+    with patch.object(
+        chat,
+        "Thread",
+        side_effect=lambda target, args, daemon: SimpleNamespace(
+            start=lambda: target(*args)
+        ),
+    ):
+        app.handle_ai_command("how to rollback deploy")
+
+    assert (
+        "Memory rerank unavailable; using lexical memory selection."
+        in app.output_field.text
+    )
+    assert written[1][1]["memory_ids_used"] == ["mem_lex"]
+
+
+def test_memory_add_warns_on_duplicates(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.message_events = [
+        {
+            "ts": "2026-01-01T10:00:00",
+            "type": "ai_response",
+            "author": "Tester",
+            "text": "Use runbook A for deploy rollback.",
+            "request_id": "req123",
+        }
+    ]
+    app.call_ai_provider = lambda **kwargs: (
+        '{"summary":"Use runbook A for deploy rollback.","topic":"deploy","confidence":"high","tags":["runbook"]}'
+    )
+    app.load_memory_entries = lambda: [
+        {
+            "id": "mem_old",
+            "summary": "Use runbook A for deploy rollback.",
+            "topic": "deploy",
+            "confidence": "high",
+            "source": "room:general ts:0",
+        }
+    ]
+    app.handle_memory_command("add")
+    assert "Potential duplicate memory entries:" in app.output_field.text
+    assert "mem_old" in app.output_field.text
+
+
+def test_memory_confirm_warns_on_duplicates(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.memory_draft_active = True
+    app.memory_draft_mode = "confirm"
+    app.memory_draft = {
+        "summary": "Use runbook A for deploy rollback.",
+        "topic": "deploy",
+        "confidence": "high",
+        "source": "room:general request:req123 ts:2026-01-01T10:00:00",
+        "room": "general",
+        "origin_event_ref": "req123",
+        "tags": [],
+    }
+    app.load_memory_entries = lambda: [
+        {
+            "id": "mem_old",
+            "summary": "Use runbook A for deploy rollback.",
+            "topic": "deploy",
+            "confidence": "high",
+            "source": "room:general ts:0",
+        }
+    ]
+    app.write_memory_entry = lambda entry: True
+    app.handle_memory_command("confirm")
+    assert "Potential duplicate memory entries:" in app.output_field.text
+    assert "Memory saved:" in app.output_field.text

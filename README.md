@@ -45,7 +45,7 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/next` - Jump to the next search match.
     *   `/prev` - Jump to the previous search match.
     *   `/clearsearch` - Clear the active search filter.
-    *   `/ai [--provider <gemini|openai>] [--model <name>] [--private] [prompt]` - Ask AI.
+    *   `/ai [--provider <gemini|openai>] [--model <name>] [--private] [--no-memory] [prompt]` - Ask AI (uses shared memory by default unless `--no-memory`).
     *   `/aiproviders` - Show local AI provider status.
     *   `/aiconfig` - Show local AI config status.
     *   `/aiconfig set-key <provider> <api-key>` - Save provider API key locally.
@@ -53,7 +53,7 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/aiconfig set-provider <provider>` - Set default provider locally.
     *   `/ai status` - Show active local AI request status.
     *   `/ai cancel` - Request cancellation of active local AI request.
-    *   `/memory add` - Draft a shared memory entry from the latest AI response.
+    *   `/memory add` - Draft a shared memory entry from the latest AI response (shows potential duplicate warnings).
     *   `/memory confirm` - Confirm and write active memory draft.
     *   `/memory cancel` - Cancel active memory draft.
     *   `/memory edit <field> <value>` - Edit draft fields (`summary`, `topic`, `confidence`, `source`).
@@ -65,6 +65,9 @@ A lightweight, serverless chat application designed for local networks. It uses 
     *   `/clear` - Clear your local chat history.
     *   `/exit` - Quit the application.
     *   `/join ai-dm` - Enter local-only private AI room.
+*   **AI grounding notes:**
+    *   `/ai` automatically retrieves relevant shared memory entries and injects them as context.
+    *   AI responses include a system citation line when memory is used (for example: `Memory used: mem_...`).
 
 ## Storage Format
 

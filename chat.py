@@ -7,6 +7,7 @@ import random
 import re
 import logging
 import shlex
+import difflib
 from typing import Any
 from datetime import datetime
 from threading import Event, Lock, Thread
@@ -34,6 +35,10 @@ from huddle_chat.constants import (
     AI_CONFIG_FILE,
     AI_DM_ROOM,
     AI_HTTP_TIMEOUT_SECONDS,
+    AI_MEMORY_CONTEXT_CHAR_BUDGET,
+    AI_MEMORY_FINAL_LIMIT,
+    AI_MEMORY_PREFILTER_LIMIT,
+    AI_MEMORY_SUMMARY_CHAR_LIMIT,
     AI_RETRY_BACKOFF_SECONDS,
     CLIENT_ID_LENGTH,
     COLORS,
@@ -50,6 +55,7 @@ from huddle_chat.constants import (
     LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
+    MEMORY_DUPLICATE_THRESHOLD,
     MEMORY_DIR_NAME,
     MEMORY_GLOBAL_FILE,
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
@@ -436,6 +442,7 @@ class ChatApp:
         provider_override: str | None = None
         model_override: str | None = None
         is_private = False
+        disable_memory = False
         prompt_parts: list[str] = []
         i = 0
         while i < len(tokens):
@@ -456,6 +463,10 @@ class ChatApp:
                 is_private = True
                 i += 1
                 continue
+            if token == "--no-memory":
+                disable_memory = True
+                i += 1
+                continue
             prompt_parts.append(token)
             i += 1
 
@@ -463,13 +474,14 @@ class ChatApp:
         if not prompt:
             return (
                 {},
-                "Usage: /ai [--provider <name>] [--model <name>] [--private] <prompt>",
+                "Usage: /ai [--provider <name>] [--model <name>] [--private] [--no-memory] <prompt>",
             )
 
         return {
             "provider_override": provider_override,
             "model_override": model_override,
             "is_private": is_private,
+            "disable_memory": disable_memory,
             "prompt": prompt,
         }, None
 
@@ -1400,6 +1412,262 @@ class ChatApp:
             logger.warning("Failed reading memory entries: %s", exc)
         return entries
 
+    def normalize_text_tokens(self, text: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]{2,}", text.lower())
+            if len(token) >= 2
+        }
+
+    def score_memory_candidate(
+        self, prompt_tokens: set[str], entry: dict[str, Any]
+    ) -> float:
+        summary = str(entry.get("summary", ""))
+        topic = str(entry.get("topic", ""))
+        source = str(entry.get("source", ""))
+        tags = entry.get("tags", [])
+        if not isinstance(tags, list):
+            tags = []
+
+        summary_tokens = self.normalize_text_tokens(summary)
+        topic_tokens = self.normalize_text_tokens(topic)
+        source_tokens = self.normalize_text_tokens(source)
+        tag_tokens = self.normalize_text_tokens(" ".join(str(tag) for tag in tags))
+
+        if not prompt_tokens:
+            return 0.0
+
+        overlap_summary = len(prompt_tokens & summary_tokens)
+        overlap_topic = len(prompt_tokens & topic_tokens)
+        overlap_tags = len(prompt_tokens & tag_tokens)
+        overlap_source = len(prompt_tokens & source_tokens)
+
+        confidence = str(entry.get("confidence", "")).strip().lower()
+        confidence_boost = 0.0
+        if confidence == "high":
+            confidence_boost = 0.4
+        elif confidence == "med":
+            confidence_boost = 0.15
+
+        recency_boost = 0.0
+        ts = str(entry.get("ts", "")).strip()
+        if ts:
+            recency_boost = 0.05
+
+        return sum(
+            [
+                overlap_summary * 2.2,
+                overlap_topic * 1.6,
+                overlap_tags * 1.1,
+                overlap_source * 0.4,
+                confidence_boost,
+                recency_boost,
+            ]
+        )
+
+    def prefilter_memory_candidates(
+        self, prompt: str, entries: list[dict[str, Any]], limit: int
+    ) -> list[dict[str, Any]]:
+        prompt_tokens = self.normalize_text_tokens(prompt)
+        scored: list[tuple[float, dict[str, Any]]] = []
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            mem_id = str(entry.get("id", "")).strip()
+            summary = str(entry.get("summary", "")).strip()
+            if not mem_id or not summary:
+                continue
+            score = self.score_memory_candidate(prompt_tokens, entry)
+            if score <= 0:
+                continue
+            scored.append((score, entry))
+
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                str(item[1].get("confidence", "")).lower() == "high",
+                str(item[1].get("ts", "")),
+            ),
+            reverse=True,
+        )
+        return [entry for _, entry in scored[:limit]]
+
+    def rerank_memory_candidates_with_ai(
+        self,
+        provider_cfg: dict[str, str],
+        prompt: str,
+        candidates: list[dict[str, Any]],
+    ) -> list[str] | None:
+        if not candidates:
+            return []
+
+        lines = []
+        for entry in candidates:
+            mem_id = str(entry.get("id", "")).strip()
+            topic = str(entry.get("topic", "general")).strip()
+            confidence = str(entry.get("confidence", "med")).strip().lower()
+            summary = str(entry.get("summary", "")).strip()
+            if not mem_id or not summary:
+                continue
+            lines.append(
+                f"{mem_id} | topic={topic} | confidence={confidence} | summary={summary[:AI_MEMORY_SUMMARY_CHAR_LIMIT]}"
+            )
+        if not lines:
+            return []
+
+        rerank_prompt = (
+            "Given the user prompt and candidate memory entries, return strict JSON only: "
+            '{"ids":["mem_id1","mem_id2", "..."]}. '
+            "Rank by usefulness for answering the prompt. Use only provided ids.\n\n"
+            f"User prompt:\n{prompt}\n\n"
+            "Candidates:\n" + "\n".join(lines)
+        )
+        try:
+            raw = self.call_ai_provider(
+                provider=provider_cfg["provider"],
+                api_key=provider_cfg["api_key"],
+                model=provider_cfg["model"],
+                prompt=rerank_prompt,
+            )
+        except Exception:
+            return None
+
+        data = self.extract_json_object(raw)
+        if not isinstance(data, dict):
+            return None
+        ids = data.get("ids", [])
+        if not isinstance(ids, list):
+            return None
+        allowed = {str(entry.get("id", "")).strip() for entry in candidates}
+        ranked_ids = []
+        for value in ids:
+            mem_id = str(value).strip()
+            if mem_id and mem_id in allowed and mem_id not in ranked_ids:
+                ranked_ids.append(mem_id)
+        return ranked_ids
+
+    def select_memory_for_prompt(
+        self, prompt: str, provider_cfg: dict[str, str]
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        entries = self.load_memory_entries()
+        if not entries:
+            return [], None
+
+        prefiltered = self.prefilter_memory_candidates(
+            prompt=prompt,
+            entries=entries,
+            limit=AI_MEMORY_PREFILTER_LIMIT,
+        )
+        if not prefiltered:
+            return [], None
+
+        ranked_ids = self.rerank_memory_candidates_with_ai(
+            provider_cfg=provider_cfg,
+            prompt=prompt,
+            candidates=prefiltered,
+        )
+        fallback_warning: str | None = None
+        if ranked_ids is None:
+            ranked = prefiltered
+            fallback_warning = (
+                "Memory rerank unavailable; using lexical memory selection."
+            )
+        else:
+            index = {str(entry.get("id", "")).strip(): entry for entry in prefiltered}
+            ranked = [index[mem_id] for mem_id in ranked_ids if mem_id in index]
+            if not ranked:
+                ranked = prefiltered
+
+        return ranked[:AI_MEMORY_FINAL_LIMIT], fallback_warning
+
+    def build_memory_context_block(self, selected: list[dict[str, Any]]) -> str:
+        if not selected:
+            return ""
+        lines: list[str] = []
+        budget = AI_MEMORY_CONTEXT_CHAR_BUDGET
+        for entry in selected:
+            mem_id = str(entry.get("id", "")).strip()
+            topic = str(entry.get("topic", "general")).strip()
+            confidence = str(entry.get("confidence", "med")).strip().lower()
+            summary = str(entry.get("summary", "")).strip()[
+                :AI_MEMORY_SUMMARY_CHAR_LIMIT
+            ]
+            source = str(entry.get("source", "")).strip()[:80]
+            if not mem_id or not summary:
+                continue
+            row = (
+                f"- {mem_id} | topic={topic} | confidence={confidence} | "
+                f"summary={summary} | source={source}"
+            )
+            if len(row) > budget:
+                break
+            lines.append(row)
+            budget -= len(row)
+            if budget <= 0:
+                break
+
+        if not lines:
+            return ""
+        return (
+            "Shared memory context (use if relevant, do not fabricate):\n"
+            + "\n".join(lines)
+        )
+
+    def format_memory_ids_line(self, memory_ids: list[str]) -> str:
+        if not memory_ids:
+            return ""
+        return f"Memory used: {', '.join(memory_ids)}"
+
+    def find_duplicate_memory_candidates(
+        self, draft: dict[str, Any], limit: int = 3
+    ) -> list[dict[str, Any]]:
+        draft_summary = str(draft.get("summary", "")).strip().lower()
+        draft_topic = str(draft.get("topic", "")).strip().lower()
+        if not draft_summary:
+            return []
+
+        entries = self.load_memory_entries()
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            existing_summary = str(entry.get("summary", "")).strip().lower()
+            if not existing_summary:
+                continue
+            sim = difflib.SequenceMatcher(None, draft_summary, existing_summary).ratio()
+            draft_tokens = self.normalize_text_tokens(draft_summary)
+            existing_tokens = self.normalize_text_tokens(existing_summary)
+            overlap_ratio = 0.0
+            if draft_tokens and existing_tokens:
+                overlap_ratio = len(draft_tokens & existing_tokens) / max(
+                    len(draft_tokens), 1
+                )
+            topic_bonus = 0.0
+            if (
+                draft_topic
+                and draft_topic == str(entry.get("topic", "")).strip().lower()
+            ):
+                topic_bonus = 0.08
+            score = max(sim, overlap_ratio) + topic_bonus
+            if score >= MEMORY_DUPLICATE_THRESHOLD:
+                scored.append((score, entry))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [entry for _, entry in scored[:limit]]
+
+    def maybe_warn_memory_duplicates(self, draft: dict[str, Any]) -> None:
+        matches = self.find_duplicate_memory_candidates(draft)
+        if not matches:
+            return
+        lines = ["Potential duplicate memory entries:"]
+        for entry in matches:
+            mem_id = str(entry.get("id", "?"))
+            topic = str(entry.get("topic", "general"))
+            summary = str(entry.get("summary", ""))[:120]
+            lines.append(f"{mem_id} [{topic}] {summary}")
+        self.append_system_message("\n".join(lines))
+
     def write_memory_entry(self, entry: dict[str, Any]) -> bool:
         self.ensure_locking_dependency()
         assert portalocker is not None
@@ -1575,6 +1843,7 @@ class ChatApp:
             "origin_event_ref": str(draft.get("origin_event_ref", "")),
             "tags": list(draft.get("tags", [])),
         }
+        self.maybe_warn_memory_duplicates(entry)
         if not self.write_memory_entry(entry):
             self.append_system_message("Failed to write shared memory entry.")
             return
@@ -1634,6 +1903,7 @@ class ChatApp:
             self.memory_draft = draft
             self.memory_draft_active = True
             self.memory_draft_mode = "confirm"
+            self.maybe_warn_memory_duplicates(draft)
             self.show_memory_draft_preview()
             return
 
@@ -1893,9 +2163,33 @@ class ChatApp:
         provider = provider_cfg["provider"]
         model = provider_cfg["model"]
         prompt = parsed["prompt"]
+        disable_memory = bool(parsed.get("disable_memory"))
         is_private = bool(parsed.get("is_private")) or self.is_local_room()
         target_room = AI_DM_ROOM if is_private else self.current_room
         scope = "private" if is_private else "room"
+        selected_memory: list[dict[str, Any]] = []
+        memory_warning: str | None = None
+        effective_prompt = prompt
+        if not disable_memory:
+            selected_memory, memory_warning = self.select_memory_for_prompt(
+                prompt=prompt,
+                provider_cfg=provider_cfg,
+            )
+            memory_context = self.build_memory_context_block(selected_memory)
+            if memory_context:
+                effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
+        if memory_warning:
+            self.append_system_message(memory_warning)
+
+        memory_ids_used = [
+            str(entry.get("id", "")).strip()
+            for entry in selected_memory
+            if str(entry.get("id", "")).strip()
+        ]
+        memory_topics_used = [
+            str(entry.get("topic", "general")).strip() or "general"
+            for entry in selected_memory
+        ]
 
         request_id = self.start_ai_request_state(
             provider=provider, model=model, target_room=target_room, scope=scope
@@ -1908,6 +2202,8 @@ class ChatApp:
         prompt_event["provider"] = provider
         prompt_event["model"] = model
         prompt_event["request_id"] = request_id
+        if memory_ids_used:
+            prompt_event["memory_ids_used"] = memory_ids_used
         if not self.write_to_file(prompt_event, room=target_room):
             self.clear_ai_request_state(request_id)
             self.append_system_message("Error: Failed to persist AI prompt.")
@@ -1925,9 +2221,11 @@ class ChatApp:
                 provider,
                 provider_cfg["api_key"],
                 model,
-                prompt,
+                effective_prompt,
                 target_room,
                 is_private,
+                memory_ids_used,
+                memory_topics_used,
             ),
             daemon=True,
         ).start()
@@ -1944,6 +2242,8 @@ class ChatApp:
         prompt: str,
         target_room: str,
         is_private: bool,
+        memory_ids_used: list[str],
+        memory_topics_used: list[str],
     ) -> None:
         answer, error_text = self.run_ai_request_with_retry(
             request_id=request_id,
@@ -1978,10 +2278,19 @@ class ChatApp:
         response_event["provider"] = provider
         response_event["model"] = model
         response_event["request_id"] = request_id
+        if memory_ids_used:
+            response_event["memory_ids_used"] = memory_ids_used
+            response_event["memory_topics_used"] = memory_topics_used
         if not self.write_to_file(response_event, room=target_room):
             self.clear_ai_request_state(request_id)
             self.append_system_message("Error: Failed to persist AI response.")
             return
+
+        ids_line = self.format_memory_ids_line(memory_ids_used)
+        if ids_line:
+            memory_event = self.build_event("system", ids_line)
+            memory_event["request_id"] = request_id
+            self.write_to_file(memory_event, room=target_room)
 
         if is_private and not self.is_local_room():
             self.append_system_message(

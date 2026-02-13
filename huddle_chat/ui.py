@@ -57,13 +57,21 @@ class SlashCompleter(Completer):
         if len(tokens) == 1 and trailing_space:
             return self._yield_candidates(
                 "",
-                ["status", "cancel", "--provider", "--model", "--private"],
+                [
+                    "status",
+                    "cancel",
+                    "--provider",
+                    "--model",
+                    "--private",
+                    "--no-memory",
+                ],
                 {
                     "status": "Show active AI request",
                     "cancel": "Cancel active AI request",
                     "--provider": "Override provider for this call",
                     "--model": "Override model for this call",
                     "--private": "Run AI privately in ai-dm",
+                    "--no-memory": "Disable shared memory for this call",
                 },
             )
 
@@ -85,13 +93,21 @@ class SlashCompleter(Completer):
         if len(tokens) == 2 and not trailing_space:
             return self._yield_candidates(
                 current,
-                ["status", "cancel", "--provider", "--model", "--private"],
+                [
+                    "status",
+                    "cancel",
+                    "--provider",
+                    "--model",
+                    "--private",
+                    "--no-memory",
+                ],
                 {
                     "status": "Show active AI request",
                     "cancel": "Cancel active AI request",
                     "--provider": "Override provider for this call",
                     "--model": "Override model for this call",
                     "--private": "Run AI privately in ai-dm",
+                    "--no-memory": "Disable shared memory for this call",
                 },
             )
         return []
