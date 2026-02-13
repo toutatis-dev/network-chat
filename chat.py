@@ -5,7 +5,6 @@ import asyncio
 import string
 import re
 import logging
-import shlex
 from typing import Any
 from datetime import datetime
 from threading import Event, Lock, Thread
@@ -53,6 +52,7 @@ from huddle_chat.commands.registry import CommandRegistry
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
 from huddle_chat.services import (
     AIService,
+    CommandOpsService,
     MemoryService,
     RuntimeService,
     StorageService,
@@ -157,6 +157,7 @@ class ChatApp:
         self.storage_service = StorageService(self)
         self.memory_service = MemoryService(self)
         self.ai_service = AIService(self)
+        self.command_ops_service = CommandOpsService(self)
         self.runtime_service = RuntimeService(self)
         self.ai_provider_clients: dict[str, ProviderClient] = {
             "gemini": GeminiClient(),
@@ -978,6 +979,8 @@ class ChatApp:
             self.memory_service = MemoryService(self)
         if not hasattr(self, "ai_service"):
             self.ai_service = AIService(self)
+        if not hasattr(self, "command_ops_service"):
+            self.command_ops_service = CommandOpsService(self)
         if not hasattr(self, "runtime_service"):
             self.runtime_service = RuntimeService(self)
         if not hasattr(self, "ai_provider_clients"):
@@ -1083,150 +1086,20 @@ class ChatApp:
         self.storage_service.load_recent_messages()
 
     def get_ai_provider_summary(self) -> str:
-        providers = self.ai_config.get("providers", {})
-        default_provider = str(self.ai_config.get("default_provider", "gemini"))
-        parts: list[str] = [f"default={default_provider}"]
-        for provider in ("gemini", "openai"):
-            data = providers.get(provider, {})
-            if not isinstance(data, dict):
-                data = {}
-            configured = (
-                "configured" if str(data.get("api_key", "")).strip() else "missing-key"
-            )
-            model = str(data.get("model", "")).strip() or "<unset>"
-            parts.append(f"{provider}({configured}, model={model})")
-        return "; ".join(parts)
+        self.ensure_services_initialized()
+        return self.command_ops_service.get_ai_provider_summary()
 
     def handle_aiconfig_command(self, args: str) -> None:
-        if not args.strip():
-            self.append_system_message(f"AI config: {self.get_ai_provider_summary()}")
-            return
-
-        try:
-            tokens = shlex.split(args)
-        except ValueError:
-            self.append_system_message("Invalid /aiconfig syntax. Check quotes.")
-            return
-        if not tokens:
-            self.append_system_message(f"AI config: {self.get_ai_provider_summary()}")
-            return
-
-        providers = {"gemini", "openai"}
-        provider_first = len(tokens) >= 2 and tokens[0].strip().lower() in providers
-        command_second = tokens[1].strip().lower() in {"set-key", "set-model"}
-        if provider_first and command_second:
-            tokens = [tokens[1], tokens[0], *tokens[2:]]
-
-        action = tokens[0].lower()
-        if action == "set-key" and len(tokens) >= 3:
-            provider = tokens[1].strip().lower()
-            key = tokens[2].strip()
-            if provider not in ("gemini", "openai"):
-                self.append_system_message("Unknown provider. Use gemini or openai.")
-                return
-            self.ai_config.setdefault("providers", {})
-            provider_cfg = self.ai_config["providers"].setdefault(provider, {})
-            if not isinstance(provider_cfg, dict):
-                provider_cfg = {}
-                self.ai_config["providers"][provider] = provider_cfg
-            provider_cfg["api_key"] = key
-            self.save_ai_config_data()
-            self.append_system_message(f"Saved API key for {provider}.")
-            return
-
-        if action == "set-model" and len(tokens) >= 3:
-            provider = tokens[1].strip().lower()
-            model = tokens[2].strip()
-            if provider not in ("gemini", "openai"):
-                self.append_system_message("Unknown provider. Use gemini or openai.")
-                return
-            self.ai_config.setdefault("providers", {})
-            provider_cfg = self.ai_config["providers"].setdefault(provider, {})
-            if not isinstance(provider_cfg, dict):
-                provider_cfg = {}
-                self.ai_config["providers"][provider] = provider_cfg
-            provider_cfg["model"] = model
-            self.save_ai_config_data()
-            self.append_system_message(f"Saved model for {provider}: {model}")
-            return
-
-        if action == "set-provider" and len(tokens) >= 2:
-            provider = tokens[1].strip().lower()
-            if provider not in ("gemini", "openai"):
-                self.append_system_message("Unknown provider. Use gemini or openai.")
-                return
-            self.ai_config["default_provider"] = provider
-            self.save_ai_config_data()
-            self.append_system_message(f"Default AI provider set to {provider}.")
-            return
-
-        self.append_system_message(
-            "Usage: /aiconfig [set-key <provider> <key> | set-model <provider> <model> | set-provider <provider>] "
-            "(also accepts: <provider> set-key <key>, <provider> set-model <model>)"
-        )
+        self.ensure_services_initialized()
+        self.command_ops_service.handle_aiconfig_command(args)
 
     def parse_share_selector(self, selector: str) -> list[dict[str, Any]]:
-        if not self.message_events:
-            return []
-        selector = selector.strip()
-        if "-" in selector:
-            left, right = selector.split("-", 1)
-            start = int(left)
-            end = int(right)
-            if start > end:
-                start, end = end, start
-            start = max(start, 1)
-            end = min(end, len(self.message_events))
-            return self.message_events[start - 1 : end]
-        index = int(selector)
-        if index < 1 or index > len(self.message_events):
-            return []
-        return [self.message_events[index - 1]]
+        self.ensure_services_initialized()
+        return self.command_ops_service.parse_share_selector(selector)
 
     def handle_share_command(self, args: str) -> None:
-        if not self.is_local_room():
-            self.append_system_message("Use /share only inside #ai-dm.")
-            return
-        try:
-            tokens = shlex.split(args)
-        except ValueError:
-            self.append_system_message("Invalid /share syntax. Check quotes.")
-            return
-        if len(tokens) < 2:
-            self.append_system_message("Usage: /share <target-room> <id|start-end>")
-            return
-        target_room = self.sanitize_room_name(tokens[0])
-        if self.is_local_room(target_room):
-            self.append_system_message("Cannot share into local-only room.")
-            return
-        selector = tokens[1]
-        try:
-            selected_events = self.parse_share_selector(selector)
-        except ValueError:
-            self.append_system_message(
-                "Invalid selector. Use numeric id or range like 2-4."
-            )
-            return
-        if not selected_events:
-            self.append_system_message("No matching messages to share.")
-            return
-
-        shared_count = 0
-        for event in selected_events:
-            event_type = str(event.get("type", "chat"))
-            if event_type not in ("ai_prompt", "ai_response", "chat", "me", "system"):
-                continue
-            payload = self.build_event(event_type, str(event.get("text", "")))
-            if event_type in ("ai_prompt", "ai_response"):
-                payload["provider"] = event.get(
-                    "provider", self.ai_config.get("default_provider", "ai")
-                )
-                payload["model"] = event.get("model", "")
-            if self.write_to_file(payload, room=target_room):
-                shared_count += 1
-        self.append_system_message(
-            f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
-        )
+        self.ensure_services_initialized()
+        self.command_ops_service.handle_share_command(args)
 
     def ensure_memory_state_initialized(self) -> None:
         self.ensure_services_initialized()
@@ -1458,103 +1331,6 @@ class ChatApp:
 
     def build_command_handlers(self) -> dict[str, Any]:
         return CommandRegistry(self).build()
-
-    def command_theme(self, args: str) -> None:
-        if not args:
-            avail = ", ".join(THEMES.keys())
-            self.append_system_message(f"Available themes: {avail}")
-            return
-        target = args.strip().lower()
-        if target in THEMES:
-            self.current_theme = target
-            self.save_config()
-            self.application.style = self.get_style()
-            self.application.invalidate()
-            return
-        self.append_system_message(f"Unknown theme '{target}'.")
-
-    def command_setpath(self, args: str) -> None:
-        self.base_dir = args.strip()
-        self.save_config()
-        self.application.exit(result="restart")
-
-    def command_status(self, args: str) -> None:
-        self.status = args[:20]
-        self.force_heartbeat()
-
-    def command_join(self, args: str) -> None:
-        if not args.strip():
-            self.append_system_message("Usage: /join <room>")
-            return
-        self.switch_room(args.strip())
-
-    def command_rooms(self, _args: str) -> None:
-        rooms = ", ".join(self.list_rooms())
-        self.append_system_message(f"Rooms: {rooms}")
-
-    def command_room(self, _args: str) -> None:
-        self.append_system_message(f"Current room: #{self.current_room}")
-
-    def command_aiproviders(self, _args: str) -> None:
-        self.append_system_message(self.get_ai_provider_summary())
-
-    def command_aiconfig(self, args: str) -> None:
-        self.handle_aiconfig_command(args)
-
-    def command_ai(self, args: str) -> None:
-        self.handle_ai_command(args)
-
-    def command_share(self, args: str) -> None:
-        self.handle_share_command(args)
-
-    def command_memory(self, args: str) -> None:
-        self.handle_memory_command(args)
-
-    def command_search(self, args: str) -> None:
-        query = args.strip()
-        self.search_query = query
-        self.rebuild_search_hits()
-        if not query:
-            self.append_system_message("Search cleared.")
-        elif self.search_hits:
-            self.append_system_message(
-                f"Found {len(self.search_hits)} matches for '{query}'."
-            )
-            self.jump_to_search_hit(0)
-        else:
-            self.append_system_message(f"No matches for '{query}'.")
-
-    def command_next(self, _args: str) -> None:
-        if not self.jump_to_search_hit(1):
-            self.append_system_message("No search matches.")
-
-    def command_prev(self, _args: str) -> None:
-        if not self.jump_to_search_hit(-1):
-            self.append_system_message("No search matches.")
-
-    def command_clearsearch(self, _args: str) -> None:
-        self.search_query = ""
-        self.search_hits = []
-        self.active_search_hit_idx = -1
-        self.append_system_message("Search cleared.")
-
-    def command_exit(self, _args: str) -> None:
-        self.application.exit()
-
-    def command_clear(self, _args: str) -> None:
-        self.messages = []
-        self.message_events = []
-        self.output_field.text = ""
-        self.search_query = ""
-        self.search_hits = []
-        self.active_search_hit_idx = -1
-
-    def command_me(self, args: str) -> None:
-        event = self.build_event("me", args)
-        if not self.write_to_file(event):
-            self.append_system_message(
-                "Error: Could not send message. Network busy or locked."
-            )
 
     def handle_input(self, text: str) -> None:
         text = text.strip()
