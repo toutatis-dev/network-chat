@@ -100,3 +100,28 @@ def test_get_message_file_routes_ai_dm_to_local_storage(tmp_path):
     assert str(path).endswith("ai-dm\\messages.jsonl") or str(path).endswith(
         "ai-dm/messages.jsonl"
     )
+
+
+def test_ai_dm_renders_share_indexes(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.current_room = "ai-dm"
+    app.message_events = [
+        {
+            "ts": "2026-01-01T10:00:00",
+            "type": "ai_prompt",
+            "author": "Tester",
+            "text": "Q",
+        },
+        {
+            "ts": "2026-01-01T10:00:01",
+            "type": "ai_response",
+            "author": "Tester",
+            "text": "A",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+        },
+    ]
+    app.refresh_output_from_events()
+    lines = app.output_field.text.splitlines()
+    assert lines[0].startswith("(1) ")
+    assert lines[1].startswith("(2) ")

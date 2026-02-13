@@ -1001,13 +1001,9 @@ class ChatApp:
 
     def append_local_event(self, event: dict[str, Any]) -> None:
         self.message_events.append(event)
-        self.messages.append(self.render_event(event))
-        if len(self.messages) > MAX_MESSAGES:
-            self.messages.pop(0)
+        if len(self.message_events) > MAX_MESSAGES:
             self.message_events.pop(0)
-        self.output_field.text = "\n".join(self.messages)
-        self.output_field.buffer.cursor_position = len(self.output_field.text)
-        self.application.invalidate()
+        self.refresh_output_from_events()
         self.rebuild_search_hits()
 
     def append_system_message(self, text: str) -> None:
@@ -1046,6 +1042,25 @@ class ChatApp:
         self.output_field.buffer.cursor_position = cursor
         self.application.invalidate()
         return True
+
+    def render_event_for_display(self, event: dict[str, Any], index: int) -> str:
+        rendered = self.render_event(event)
+        if self.is_local_room():
+            return f"({index}) {rendered}"
+        return rendered
+
+    def refresh_output_from_events(self) -> None:
+        self.messages = [
+            self.render_event_for_display(event, idx + 1)
+            for idx, event in enumerate(self.message_events)
+        ]
+        if len(self.messages) > MAX_MESSAGES:
+            overflow = len(self.messages) - MAX_MESSAGES
+            self.messages = self.messages[overflow:]
+            self.message_events = self.message_events[overflow:]
+        self.output_field.text = "\n".join(self.messages)
+        self.output_field.buffer.cursor_position = len(self.output_field.text)
+        self.application.invalidate()
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1161,10 +1176,7 @@ class ChatApp:
             self.last_pos_by_room[self.current_room] = 0
 
         self.message_events = loaded_events[-MAX_MESSAGES:]
-        self.messages = [self.render_event(event) for event in self.message_events]
-        self.output_field.text = "\n".join(self.messages)
-        self.output_field.buffer.cursor_position = len(self.output_field.text)
-        self.application.invalidate()
+        self.refresh_output_from_events()
         self.rebuild_search_hits()
 
     def get_ai_provider_summary(self) -> str:
@@ -1637,15 +1649,9 @@ class ChatApp:
                                 if event is None:
                                     continue
                                 self.message_events.append(event)
-                                self.messages.append(self.render_event(event))
-                                if len(self.messages) > MAX_MESSAGES:
-                                    self.messages.pop(0)
+                                if len(self.message_events) > MAX_MESSAGES:
                                     self.message_events.pop(0)
-                            self.output_field.text = "\n".join(self.messages)
-                            self.output_field.buffer.cursor_position = len(
-                                self.output_field.text
-                            )
-                            self.application.invalidate()
+                            self.refresh_output_from_events()
                             self.rebuild_search_hits()
                         self.last_pos_by_room[room] = f.tell()
                 except OSError as exc:
