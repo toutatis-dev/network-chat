@@ -1348,6 +1348,10 @@ class ChatApp:
         self.ensure_services_initialized()
         return self.action_service.format_pending_actions()
 
+    def prune_terminal_actions(self) -> int:
+        self.ensure_services_initialized()
+        return self.action_service.prune_terminal_actions()
+
     def get_action_details(self, action_id: str) -> str:
         self.ensure_services_initialized()
         return self.action_service.get_action_details(action_id)

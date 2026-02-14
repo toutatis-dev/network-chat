@@ -82,3 +82,36 @@ def test_expired_action_cannot_be_approved():
     assert ok is False
     assert "expired" in msg
     assert app.pending_actions["abc12345"]["status"] == "expired"
+
+
+def test_format_pending_actions_reports_terminal_summary():
+    app = SimpleNamespace()
+    app.name = "tester"
+    app.current_room = "general"
+    app.pending_actions = {
+        "a1": {"action_id": "a1", "tool": "git_status", "summary": "x", "status": "pending", "command_preview": "git_status {}"},
+        "a2": {"action_id": "a2", "tool": "git_diff", "summary": "y", "status": "expired", "command_preview": "git_diff {}"},
+        "a3": {"action_id": "a3", "tool": "run_tests", "summary": "z", "status": "failed", "command_preview": "run_tests {}"},
+    }
+    service = ActionService(app)
+    text = service.format_pending_actions()
+    assert "Pending actions:" in text
+    assert "Other actions: expired=1, failed=1" in text
+    assert "/actions prune" in text
+
+
+def test_prune_terminal_actions_removes_stale_entries():
+    app = SimpleNamespace()
+    app.name = "tester"
+    app.current_room = "general"
+    app.pending_actions = {
+        "a1": {"action_id": "a1", "status": "pending"},
+        "a2": {"action_id": "a2", "status": "expired"},
+        "a3": {"action_id": "a3", "status": "failed"},
+        "a4": {"action_id": "a4", "status": "denied"},
+        "a5": {"action_id": "a5", "status": "completed"},
+    }
+    service = ActionService(app)
+    removed = service.prune_terminal_actions()
+    assert removed == 4
+    assert set(app.pending_actions.keys()) == {"a1"}

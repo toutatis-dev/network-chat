@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 
 class ActionService:
+    TERMINAL_STATUSES = {"denied", "expired", "completed", "failed"}
+
     def __init__(self, app: "ChatApp"):
         self.app = app
 
@@ -139,8 +141,22 @@ class ActionService:
             for action in self.app.pending_actions.values()
             if str(action.get("status", "")) == "pending"
         ]
+        counts: dict[str, int] = {}
+        for action in self.app.pending_actions.values():
+            status = str(action.get("status", "")).strip().lower()
+            if status and status != "pending":
+                counts[status] = counts.get(status, 0) + 1
+        if not pending and not counts:
+            return "No actions."
         if not pending:
-            return "No pending actions."
+            summary = ", ".join(
+                f"{status}={counts[status]}" for status in sorted(counts.keys())
+            )
+            return (
+                "No pending actions.\n"
+                f"Other actions: {summary}\n"
+                "Use /actions prune to clear terminal actions."
+            )
         lines = ["Pending actions:"]
         for action in pending[-10:]:
             lines.append(
@@ -148,6 +164,12 @@ class ActionService:
                 f"{action.get('tool')} - {action.get('summary')}"
             )
             lines.append(f"  {action.get('command_preview')}")
+        if counts:
+            summary = ", ".join(
+                f"{status}={counts[status]}" for status in sorted(counts.keys())
+            )
+            lines.append(f"Other actions: {summary}")
+            lines.append("Use /actions prune to clear terminal actions.")
         return "\n".join(lines)
 
     def get_action_details(self, action_id: str) -> str:
@@ -231,3 +253,14 @@ class ActionService:
                 "user": self.app.name,
             },
         )
+
+    def prune_terminal_actions(self) -> int:
+        self.ensure_pending_actions_initialized()
+        to_remove = [
+            action_id
+            for action_id, action in self.app.pending_actions.items()
+            if str(action.get("status", "")).strip().lower() in self.TERMINAL_STATUSES
+        ]
+        for action_id in to_remove:
+            self.app.pending_actions.pop(action_id, None)
+        return len(to_remove)

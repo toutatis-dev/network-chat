@@ -97,7 +97,12 @@ class CommandRegistry:
     def command_memory(self, args: str) -> None:
         self.app.handle_memory_command(args)
 
-    def command_actions(self, _args: str) -> None:
+    def command_actions(self, args: str) -> None:
+        sub = args.strip().lower()
+        if sub == "prune":
+            removed = self.app.prune_terminal_actions()
+            self.app.append_system_message(f"Pruned {removed} terminal action(s).")
+            return
         self.app.append_system_message(self.app.get_pending_actions_text())
 
     def command_action(self, args: str) -> None:
