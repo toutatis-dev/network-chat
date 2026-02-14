@@ -1,6 +1,8 @@
 colorama==0.4.6
+google-genai
 markdown-it-py==4.0.0
 mdurl==0.1.2
+openai
 portalocker==3.2.0
 prompt_toolkit==3.0.52
 Pygments==2.19.2
