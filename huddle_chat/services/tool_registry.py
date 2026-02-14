@@ -24,6 +24,7 @@ class ToolRegistryService:
                         "query": {"type": "string"},
                         "path": {"type": "string"},
                         "maxResults": {"type": "integer"},
+                        "maxDurationSec": {"type": "integer"},
                     },
                     "required": ["query"],
                 },
@@ -42,6 +43,7 @@ class ToolRegistryService:
                     "properties": {
                         "path": {"type": "string"},
                         "maxResults": {"type": "integer"},
+                        "maxDurationSec": {"type": "integer"},
                     },
                     "required": [],
                 },
@@ -61,6 +63,7 @@ class ToolRegistryService:
                         "path": {"type": "string"},
                         "startLine": {"type": "integer"},
                         "lineCount": {"type": "integer"},
+                        "maxDurationSec": {"type": "integer"},
                     },
                     "required": ["path"],
                 },
@@ -127,7 +130,7 @@ class ToolRegistryService:
                 "description": "Show git working tree state.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {"maxDurationSec": {"type": "integer"}},
                     "required": [],
                 },
                 "annotations": {
@@ -145,6 +148,7 @@ class ToolRegistryService:
                     "properties": {
                         "path": {"type": "string"},
                         "maxLines": {"type": "integer"},
+                        "maxDurationSec": {"type": "integer"},
                     },
                     "required": [],
                 },
