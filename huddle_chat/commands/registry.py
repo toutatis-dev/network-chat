@@ -36,6 +36,8 @@ class CommandRegistry:
             "/clearsearch": self.command_clearsearch,
             "/help": self.command_help,
             "/onboard": self.command_onboard,
+            "/playbook": self.command_playbook,
+            "/explain": self.command_explain,
             "/exit": self.command_exit,
             "/quit": self.command_exit,
             "/clear": self.command_clear,
@@ -170,6 +172,12 @@ class CommandRegistry:
 
     def command_onboard(self, args: str) -> None:
         self.app.handle_onboard_command(args)
+
+    def command_playbook(self, args: str) -> None:
+        self.app.handle_playbook_command(args)
+
+    def command_explain(self, args: str) -> None:
+        self.app.handle_explain_command(args)
 
     def command_exit(self, _args: str) -> None:
         self.app.application.exit()

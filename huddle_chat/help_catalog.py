@@ -20,6 +20,8 @@ HELP_TOPICS: dict[str, HelpTopic] = {
         "commands": [
             "/help <topic>",
             "/onboard start",
+            "/playbook list",
+            "/explain action <action-id>",
             "/ai <prompt>",
             "/actions",
             "/memory add",
@@ -33,7 +35,15 @@ HELP_TOPICS: dict[str, HelpTopic] = {
             "Using /share outside #ai-dm.",
             "Running /approve without checking /action <id> details.",
         ],
-        "related_topics": ["ai", "actions", "agent", "memory", "tools"],
+        "related_topics": [
+            "ai",
+            "actions",
+            "agent",
+            "memory",
+            "tools",
+            "playbook",
+            "explain",
+        ],
     },
     "ai": {
         "title": "AI Requests",
@@ -162,6 +172,44 @@ HELP_TOPICS: dict[str, HelpTopic] = {
             "Running tools outside allowed roots.",
         ],
         "related_topics": ["actions", "agent"],
+    },
+    "playbook": {
+        "title": "Playbooks",
+        "summary": "Playbooks are guided workflow templates for common tasks.",
+        "commands": [
+            "/playbook list",
+            "/playbook show <name>",
+            "/playbook run <name>",
+        ],
+        "examples": [
+            "/playbook list",
+            "/playbook show code-task",
+            "/playbook run memory-capture",
+        ],
+        "common_errors": [
+            "Running playbooks during active AI requests.",
+            "Expecting placeholder steps to auto-fill action IDs.",
+        ],
+        "related_topics": ["explain", "actions", "ai", "memory"],
+    },
+    "explain": {
+        "title": "Explain",
+        "summary": "Explain summarizes action, agent, or tool context for safer decisions.",
+        "commands": [
+            "/explain action <action-id>",
+            "/explain agent",
+            "/explain tool <tool-name>",
+        ],
+        "examples": [
+            "/explain action ab12cd34",
+            "/explain agent",
+            "/explain tool run_tests",
+        ],
+        "common_errors": [
+            "Using unknown action IDs after /actions prune.",
+            "Using unknown tool names not in registry.",
+        ],
+        "related_topics": ["playbook", "actions", "tools", "agent"],
     },
     "rooms": {
         "title": "Rooms and Sharing",

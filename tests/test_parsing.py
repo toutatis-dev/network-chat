@@ -224,6 +224,32 @@ def test_mention_not_triggered_in_email_like_text(app_instance):
     assert completions == []
 
 
+def test_render_event_does_not_clip_long_text_for_system_help(app_instance):
+    long_text = "x" * 800
+    event = {
+        "ts": "2026-01-01T10:00:00",
+        "type": "system",
+        "author": "system",
+        "text": long_text,
+    }
+    rendered = app_instance.render_event(event)
+    assert long_text in rendered
+
+
+def test_render_event_does_not_clip_long_text_for_ai_response(app_instance):
+    long_text = "a" * 900
+    event = {
+        "ts": "2026-01-01T10:00:00",
+        "type": "ai_response",
+        "author": "system",
+        "text": long_text,
+        "provider": "openai",
+        "model": "gpt-4o-mini",
+    }
+    rendered = app_instance.render_event(event)
+    assert long_text in rendered
+
+
 def test_slash_completion_unchanged_with_theme_prefix(app_instance):
     completer = chat.SlashCompleter(app_instance)
     completions = list(
@@ -323,6 +349,34 @@ def test_onboard_completion_suggests_actions(app_instance):
     assert "status" in texts
     assert "start" in texts
     assert "reset" in texts
+
+
+def test_playbook_completion_suggests_subcommands(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/playbook ", cursor_position=10),
+            CompleteEvent(),
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "list" in texts
+    assert "show" in texts
+    assert "run" in texts
+
+
+def test_explain_completion_suggests_subjects(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/explain ", cursor_position=9),
+            CompleteEvent(),
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "action" in texts
+    assert "agent" in texts
+    assert "tool" in texts
 
 
 def test_parse_event_line_rejects_unknown_event_type(app_instance):

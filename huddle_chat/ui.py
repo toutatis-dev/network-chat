@@ -8,6 +8,7 @@ from prompt_toolkit.lexers import Lexer
 
 from huddle_chat.constants import THEMES
 from huddle_chat.help_catalog import HELP_TOPICS
+from huddle_chat.playbook_catalog import PLAYBOOKS
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -283,6 +284,61 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, actions)
         return []
 
+    def _playbook_names(self) -> list[str]:
+        return sorted(PLAYBOOKS.keys())
+
+    def _tool_names(self) -> list[str]:
+        app_ref = self.app_ref
+        try:
+            if hasattr(app_ref, "ensure_services_initialized"):
+                app_ref.ensure_services_initialized()
+            if hasattr(app_ref, "tool_service"):
+                defs = app_ref.tool_service.registry.get_tool_definitions()
+                names = [str(row.get("name", "")).strip() for row in defs]
+                names = [name for name in names if name]
+                if names:
+                    return sorted(set(names))
+        except Exception:
+            pass
+        return [
+            "search_repo",
+            "list_files",
+            "read_file",
+            "run_tests",
+            "run_lint",
+            "run_typecheck",
+            "git_status",
+            "git_diff",
+        ]
+
+    def _complete_playbook_command(self, text: str) -> Iterable[Completion]:
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        actions = ["list", "show", "run", "help"]
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/playbook"])
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, actions)
+        if len(values) == 2 and values[1] in {"show", "run"}:
+            return self._yield_candidates(current, self._playbook_names())
+        return []
+
+    def _complete_explain_command(self, text: str) -> Iterable[Completion]:
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        subjects = ["action", "agent", "tool", "help"]
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/explain"])
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, subjects)
+        if len(values) == 2 and values[1] == "tool":
+            return self._yield_candidates(current, self._tool_names())
+        return []
+
     def get_completions(
         self, document: Any, complete_event: Any
     ) -> Iterable[Completion]:
@@ -309,6 +365,14 @@ class SlashCompleter(Completer):
 
         if re.match(r"^/onboard(\s|$)", text):
             yield from self._complete_onboard_command(text)
+            return
+
+        if re.match(r"^/playbook(\s|$)", text):
+            yield from self._complete_playbook_command(text)
+            return
+
+        if re.match(r"^/explain(\s|$)", text):
+            yield from self._complete_explain_command(text)
             return
 
         if re.match(r"^/ai(\s|$)", text):
@@ -360,6 +424,8 @@ class SlashCompleter(Completer):
                 ("/toolpaths", "Manage allowed external tool paths"),
                 ("/help", "Show workflow and command help by topic"),
                 ("/onboard", "Guided setup and workflow checklist"),
+                ("/playbook", "Run guided workflow playbooks"),
+                ("/explain", "Explain action/agent/tool state"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
             ]

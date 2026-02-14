@@ -74,6 +74,8 @@ Launchers create/use a local venv and install runtime dependencies.
 - `/setpath <path>` set shared base path and restart.
 - `/help [topic]` show workflow-oriented help pages.
 - `/onboard [status|start|reset]` guided setup/checklist for first workflow.
+- `/playbook [list|show <name>|run <name>]` guided workflow templates.
+- `/explain [action <id>|agent|tool <name>]` concise context summaries for safer decisions.
 - `/clear` clear local viewport state.
 - `/exit` or `/quit` exit app.
 

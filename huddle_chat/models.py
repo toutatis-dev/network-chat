@@ -134,4 +134,20 @@ class ToolCallResult(TypedDict):
     meta: dict[str, Any]
 
 
+class PlaybookStep(TypedDict):
+    id: str
+    title: str
+    kind: str
+    command_template: str
+    requires_input: bool
+    placeholders: list[str]
+    expected_result: str
+
+
+class PlaybookDefinition(TypedDict):
+    name: str
+    summary: str
+    steps: list[PlaybookStep]
+
+
 JsonDict = dict[str, Any]

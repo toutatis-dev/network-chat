@@ -44,6 +44,7 @@ from huddle_chat.constants import (
     DEFAULT_PATH,
     DEFAULT_ROOM,
     EVENT_SCHEMA_VERSION,
+    EVENT_DISPLAY_TEXT_MAX_CHARS,
     LOCAL_CHAT_ROOT,
     LOCAL_MEMORY_ROOT,
     LOCAL_ROOMS_ROOT,
@@ -70,8 +71,10 @@ from huddle_chat.services import (
     AIService,
     AgentService,
     CommandOpsService,
+    ExplainService,
     HelpService,
     MemoryService,
+    PlaybookService,
     RoutingService,
     RuntimeService,
     StorageService,
@@ -177,6 +180,7 @@ class ChatApp:
         self.memory_draft: dict[str, Any] | None = None
         self.agent_draft_active = False
         self.agent_draft: dict[str, Any] | None = None
+        self.playbook_run_state: dict[str, Any] | None = None
         self.pending_actions: dict[str, dict[str, Any]] = {}
         self.presence_malformed_dropped = 0
         self.presence_quarantined = 0
@@ -192,6 +196,8 @@ class ChatApp:
         self.tool_service = ToolService(self)
         self.command_ops_service = CommandOpsService(self)
         self.help_service = HelpService(self)
+        self.playbook_service = PlaybookService(self)
+        self.explain_service = ExplainService(self)
         self.runtime_service = RuntimeService(self)
         self.ai_provider_clients: dict[str, ProviderClient] = {
             "gemini": GeminiClient(),
@@ -1113,7 +1119,9 @@ class ChatApp:
         ts = ts_raw[-8:] if len(ts_raw) >= 8 else ts_raw
         event_type = str(event.get("type", "chat"))
         author = self.sanitize_sidebar_text(event.get("author", "Unknown"), 64)
-        text = self.sanitize_sidebar_text(event.get("text", ""), 400)
+        text = self.sanitize_sidebar_text(
+            event.get("text", ""), EVENT_DISPLAY_TEXT_MAX_CHARS
+        )
 
         if event_type == "me":
             return f"[{ts}] * {author} {text}".rstrip()
@@ -1297,6 +1305,10 @@ class ChatApp:
             self.command_ops_service = CommandOpsService(self)
         if not hasattr(self, "help_service"):
             self.help_service = HelpService(self)
+        if not hasattr(self, "playbook_service"):
+            self.playbook_service = PlaybookService(self)
+        if not hasattr(self, "explain_service"):
+            self.explain_service = ExplainService(self)
         if not hasattr(self, "runtime_service"):
             self.runtime_service = RuntimeService(self)
         if not hasattr(self, "ai_provider_clients"):
@@ -1306,6 +1318,8 @@ class ChatApp:
             }
         if not hasattr(self, "pending_actions"):
             self.pending_actions = {}
+        if not hasattr(self, "playbook_run_state"):
+            self.playbook_run_state = None
         if not hasattr(self, "active_agent_profile_id"):
             self.active_agent_profile_id = "default"
         if not hasattr(self, "tool_paths"):
@@ -1502,6 +1516,18 @@ class ChatApp:
     def handle_onboard_command(self, args: str) -> None:
         self.ensure_services_initialized()
         self.help_service.handle_onboard_command(args)
+
+    def handle_playbook_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.playbook_service.handle_playbook_command(args)
+
+    def handle_explain_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.explain_service.handle_explain_command(args)
+
+    def handle_playbook_confirmation_input(self, text: str) -> bool:
+        self.ensure_services_initialized()
+        return self.playbook_service.handle_confirmation_input(text)
 
     def get_tool_paths(self) -> list[str]:
         paths: list[str] = []
@@ -1801,6 +1827,10 @@ class ChatApp:
             return
 
         if self.handle_memory_confirmation_input(text):
+            self.input_field.text = ""
+            return
+
+        if self.handle_playbook_confirmation_input(text):
             self.input_field.text = ""
             return
 
