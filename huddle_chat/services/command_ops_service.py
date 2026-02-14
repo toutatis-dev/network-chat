@@ -225,29 +225,29 @@ class CommandOpsService:
                 if len(tokens) >= 2
                 else self.app.agent_service.get_active_profile_id()
             )
-            profile = self.app.agent_service.get_profile(profile_id)
-            if profile is None:
+            profile_data: Any = self.app.agent_service.get_profile(profile_id)
+            if profile_data is None:
                 self.app.append_system_message(
                     f"Unknown agent profile '{self.app.sanitize_agent_id(profile_id)}'."
                 )
                 return
-            memory_policy = profile.get("memory_policy", {})
+            memory_policy = profile_data.get("memory_policy", {})
             scopes: list[str] = []
             if isinstance(memory_policy, dict):
                 raw_scopes = memory_policy.get("scopes", [])
                 if isinstance(raw_scopes, list):
                     scopes = [str(item) for item in raw_scopes]
-            routes = profile.get("routing_policy", {})
+            routes = profile_data.get("routing_policy", {})
             route_count = 0
             if isinstance(routes, dict):
                 route_map = routes.get("routes", {})
                 if isinstance(route_map, dict):
                     route_count = len(route_map)
             self.app.append_system_message(
-                f"Agent profile {profile.get('id', '?')}: "
-                f"name={profile.get('name', '')}, "
+                f"Agent profile {profile_data.get('id', '?')}: "
+                f"name={profile_data.get('name', '')}, "
                 f"memory_scopes={','.join(scopes) if scopes else 'team'}, "
-                f"routes={route_count}, version={profile.get('version', 1)}"
+                f"routes={route_count}, version={profile_data.get('version', 1)}"
             )
             return
 
@@ -289,15 +289,16 @@ class CommandOpsService:
                 )
                 return
             active = self.app.agent_service.get_active_profile()
-            routing_policy = active.get("routing_policy", {})
-            if not isinstance(routing_policy, dict):
-                routing_policy = {}
-            routes = routing_policy.get("routes", {})
-            if not isinstance(routes, dict):
-                routes = {}
-            routes[task_class] = {"provider": provider, "model": model}
-            routing_policy["routes"] = routes
-            active["routing_policy"] = routing_policy
+            active_any: Any = active
+            routing_policy_any: Any = active_any.get("routing_policy", {})
+            if not isinstance(routing_policy_any, dict):
+                routing_policy_any = {}
+            route_map_any: Any = routing_policy_any.get("routes", {})
+            if not isinstance(route_map_any, dict):
+                route_map_any = {}
+            route_map_any[task_class] = {"provider": provider, "model": model}
+            routing_policy_any["routes"] = route_map_any
+            active_any["routing_policy"] = routing_policy_any
             ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
             if not ok:
                 self.app.append_system_message(msg)

@@ -1,5 +1,6 @@
 import shlex
 import time
+from collections.abc import Callable
 from threading import Thread
 from typing import TYPE_CHECKING, Any
 
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class AIService:
-    def __init__(self, app: "ChatApp"):
+    def __init__(self, app: "ChatApp") -> None:
         self.app = app
 
     def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
@@ -185,7 +186,7 @@ class AIService:
             except Exception as retry_exc:
                 return None, f"AI request failed after retry: {retry_exc}"
 
-    def create_thread(self, target, args):
+    def create_thread(self, target: Callable[..., None], args: tuple[Any, ...]) -> Thread:
         try:
             import chat
 

@@ -1,7 +1,9 @@
 import re
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any, cast
 
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text.base import StyleAndTextTuples
 from prompt_toolkit.lexers import Lexer
 
 from huddle_chat.constants import THEMES
@@ -11,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class SlashCompleter(Completer):
-    def __init__(self, app_ref: "ChatApp"):
+    def __init__(self, app_ref: "ChatApp") -> None:
         self.app_ref = app_ref
         self.model_hints = {
             "gemini": ["gemini-2.5-flash", "gemini-2.5-pro"],
@@ -20,7 +22,7 @@ class SlashCompleter(Completer):
 
     def _yield_candidates(
         self, prefix: str, options: list[str], metas: dict[str, str] | None = None
-    ):
+    ) -> Iterable[Completion]:
         metas = metas or {}
         for value in options:
             if value.startswith(prefix):
@@ -49,7 +51,7 @@ class SlashCompleter(Completer):
                 return tokens[idx + 1].strip().lower()
         return None
 
-    def _complete_ai_command(self, text: str):
+    def _complete_ai_command(self, text: str) -> Iterable[Completion]:
         tokens = text.split()
         trailing_space = text.endswith(" ")
         if len(tokens) == 1 and not trailing_space:
@@ -122,7 +124,7 @@ class SlashCompleter(Completer):
             )
         return []
 
-    def _complete_aiconfig_command(self, text: str):
+    def _complete_aiconfig_command(self, text: str) -> Iterable[Completion]:
         tokens = text.split()
         trailing_space = text.endswith(" ")
         providers = self._provider_names()
@@ -170,7 +172,7 @@ class SlashCompleter(Completer):
             return []
         return []
 
-    def _complete_memory_command(self, text: str):
+    def _complete_memory_command(self, text: str) -> Iterable[Completion]:
         tokens = text.split()
         trailing_space = text.endswith(" ")
         subcommands = [
@@ -205,7 +207,7 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, ["private", "repo", "team"])
         return []
 
-    def _complete_agent_command(self, text: str):
+    def _complete_agent_command(self, text: str) -> Iterable[Completion]:
         tokens = text.split()
         trailing_space = text.endswith(" ")
         subcommands = ["status", "list", "use", "show", "memory", "route"]
@@ -228,7 +230,7 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, self._provider_names())
         return []
 
-    def _complete_toolpaths_command(self, text: str):
+    def _complete_toolpaths_command(self, text: str) -> Iterable[Completion]:
         tokens = text.split()
         trailing_space = text.endswith(" ")
         if len(tokens) == 1 and not trailing_space:
@@ -239,7 +241,7 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, ["list", "add", "remove"])
         return []
 
-    def get_completions(self, document, complete_event):
+    def get_completions(self, document: Any, complete_event: Any) -> Iterable[Completion]:
         text = document.text_before_cursor
         if re.match(r"^/aiconfig(\s|$)", text):
             yield from self._complete_aiconfig_command(text)
@@ -341,15 +343,17 @@ class SlashCompleter(Completer):
 
 
 class ChatLexer(Lexer):
-    def __init__(self, app_ref: "ChatApp"):
+    def __init__(self, app_ref: "ChatApp") -> None:
         self.app_ref = app_ref
 
-    def lex_document(self, document):
-        def get_line_tokens(line_num):
+    def lex_document(
+        self, document: Any
+    ) -> Callable[[int], StyleAndTextTuples]:
+        def get_line_tokens(line_num: int) -> StyleAndTextTuples:
             try:
                 line_text = document.lines[line_num]
-                return self.app_ref.lex_line(line_text)
+                return cast(StyleAndTextTuples, self.app_ref.lex_line(line_text))
             except Exception:
-                return [("", document.lines[line_num])]
+                return cast(StyleAndTextTuples, [("", document.lines[line_num])])
 
         return get_line_tokens

@@ -25,7 +25,7 @@ class ToolExecutorService:
         return text[:ACTION_MAX_OUTPUT_PREVIEW_BYTES], True
 
     def _allowed_roots(self) -> list[Path]:
-        roots: list[Path] = [Path(self.app.base_dir).resolve()]
+        roots: list[Path] = [Path(str(self.app.base_dir)).resolve()]
         configured = getattr(self.app, "tool_paths", [])
         if isinstance(configured, list):
             for raw in configured:
@@ -79,7 +79,7 @@ class ToolExecutorService:
         return proc.returncode, output.strip(), duration_ms
 
     def _venv_python(self) -> str:
-        venv_dir = Path(self.app.base_dir) / "venv"
+        venv_dir = Path(str(self.app.base_dir)) / "venv"
         if self.app.is_windows():
             return str(venv_dir / "Scripts" / "python.exe")
         return str(venv_dir / "bin" / "python")
@@ -93,7 +93,7 @@ class ToolExecutorService:
                 query = str(args.get("query", "")).strip()
                 path = str(args.get("path", ".")).strip() or "."
                 max_results = max(1, min(1000, int(args.get("maxResults", 200))))
-                target = (Path(self.app.base_dir) / path).resolve()
+                target = (Path(str(self.app.base_dir)) / path).resolve()
                 ok, err = self._assert_allowed_path(target)
                 if not ok:
                     return self._error_result(request, err or "Path denied", None, 0)
@@ -111,7 +111,7 @@ class ToolExecutorService:
 
             if tool == "list_files":
                 path = str(args.get("path", ".")).strip() or "."
-                target = (Path(self.app.base_dir) / path).resolve()
+                target = (Path(str(self.app.base_dir)) / path).resolve()
                 ok, err = self._assert_allowed_path(target)
                 if not ok:
                     return self._error_result(request, err or "Path denied", None, 0)
@@ -133,7 +133,7 @@ class ToolExecutorService:
                     return self._error_result(request, "Missing path", None, 0)
                 target = Path(path)
                 if not target.is_absolute():
-                    target = (Path(self.app.base_dir) / target).resolve()
+                    target = (Path(str(self.app.base_dir)) / target).resolve()
                 ok, err = self._assert_allowed_path(target)
                 if not ok:
                     return self._error_result(request, err or "Path denied", None, 0)

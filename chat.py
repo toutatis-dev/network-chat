@@ -5,7 +5,7 @@ import asyncio
 import string
 import re
 import logging
-from typing import Any
+from typing import Any, cast
 from datetime import datetime
 from threading import Event, Lock, Thread
 from pathlib import Path
@@ -68,6 +68,7 @@ from huddle_chat.services import (
     StorageService,
     ToolService,
 )
+from huddle_chat.models import AgentProfile, ResolvedRoute
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
 portalocker: Any
@@ -103,7 +104,7 @@ LOCK_MAX_ATTEMPTS = DEFAULT_LOCK_MAX_ATTEMPTS
 
 
 class MessageFileWatchHandler(FileSystemEventHandler):
-    def __init__(self, app_ref: "ChatApp"):
+    def __init__(self, app_ref: "ChatApp") -> None:
         super().__init__()
         self.app_ref = app_ref
 
@@ -112,17 +113,17 @@ class MessageFileWatchHandler(FileSystemEventHandler):
         if normalized.endswith("/messages.jsonl"):
             self.app_ref.signal_monitor_refresh()
 
-    def on_created(self, event) -> None:
+    def on_created(self, event: Any) -> None:
         if getattr(event, "is_directory", False):
             return
         self._handle_path(getattr(event, "src_path", ""))
 
-    def on_modified(self, event) -> None:
+    def on_modified(self, event: Any) -> None:
         if getattr(event, "is_directory", False):
             return
         self._handle_path(getattr(event, "src_path", ""))
 
-    def on_moved(self, event) -> None:
+    def on_moved(self, event: Any) -> None:
         if getattr(event, "is_directory", False):
             return
         self._handle_path(getattr(event, "src_path", ""))
@@ -130,7 +131,7 @@ class MessageFileWatchHandler(FileSystemEventHandler):
 
 
 class ChatApp:
-    def __init__(self):
+    def __init__(self) -> None:
         self.ensure_locking_dependency()
         self.name = "Anonymous"
         self.color = "white"
@@ -184,7 +185,8 @@ class ChatApp:
 
         # Load Config
         config_data = self.load_config_data()
-        self.base_dir = config_data.get("path", DEFAULT_PATH)
+        configured_path = config_data.get("path", DEFAULT_PATH)
+        self.base_dir = str(configured_path).strip() if configured_path else ""
         self.current_theme = config_data.get("theme", "default")
         configured_name = str(config_data.get("username", "")).strip()
         if configured_name:
@@ -249,11 +251,11 @@ class ChatApp:
         self.kb = KeyBindings()
 
         @self.kb.add("enter")
-        def _(event):
+        def _(event: Any) -> None:
             self.handle_input(self.input_field.text)
 
         @self.kb.add("tab")
-        def _(event):
+        def _(event: Any) -> None:
             buffer = event.current_buffer
             complete_state = buffer.complete_state
             if complete_state is not None:
@@ -266,7 +268,7 @@ class ChatApp:
             buffer.start_completion(select_first=True)
 
         @self.kb.add("c-c")
-        def _(event):
+        def _(event: Any) -> None:
             event.app.exit()
 
         root_container = HSplit(
@@ -292,7 +294,7 @@ class ChatApp:
             ],
         )
 
-        self.application = Application(
+        self.application: Any = Application(
             layout=Layout(self.layout_container),
             key_bindings=self.kb,
             style=self.get_style(),
@@ -424,7 +426,7 @@ class ChatApp:
             logger.warning("Failed ensuring local AI paths: %s", exc)
 
     def get_memory_dir(self) -> Path:
-        return (Path(self.base_dir) / MEMORY_DIR_NAME).resolve()
+        return (Path(str(self.base_dir)) / MEMORY_DIR_NAME).resolve()
 
     def get_memory_file(self) -> Path:
         return self.get_memory_dir() / MEMORY_GLOBAL_FILE
@@ -447,7 +449,7 @@ class ChatApp:
             logger.warning("Failed ensuring memory paths: %s", exc)
 
     def get_agents_dir(self) -> Path:
-        return (Path(self.base_dir) / AGENTS_DIR_NAME).resolve()
+        return (Path(str(self.base_dir)) / AGENTS_DIR_NAME).resolve()
 
     def get_agent_profiles_dir(self) -> Path:
         return (self.get_agents_dir() / AGENT_PROFILES_DIR_NAME).resolve()
@@ -887,7 +889,7 @@ class ChatApp:
                 fragments.append(("fg:#888888", f" #{user_room}"))
             if idx < len(users) - 1:
                 fragments.append(("", "\n"))
-        self.sidebar_control.text = fragments
+        self.sidebar_control.text = cast(Any, fragments)
         self.application.invalidate()
 
     def refresh_presence_sidebar(self) -> None:
@@ -1263,7 +1265,7 @@ class ChatApp:
         self.ensure_services_initialized()
         self.command_ops_service.handle_share_command(args)
 
-    def get_active_agent_profile(self) -> dict[str, Any]:
+    def get_active_agent_profile(self) -> AgentProfile:
         self.ensure_services_initialized()
         return self.agent_service.get_active_profile()
 
@@ -1281,7 +1283,7 @@ class ChatApp:
         task_class: str,
         provider_override: str | None,
         model_override: str | None,
-    ) -> tuple[dict[str, str] | None, str | None]:
+    ) -> tuple[ResolvedRoute | None, str | None]:
         self.ensure_services_initialized()
         return self.routing_service.resolve_route(
             task_class=task_class,
