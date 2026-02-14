@@ -1,0 +1,13 @@
+{
+  "id": "mem_1771012800_repo_d4e5f6",
+  "ts": "2026-02-14T11:01:00",
+  "author": "alice",
+  "summary": "Use ./check.sh --check before committing.",
+  "topic": "workflow",
+  "confidence": "high",
+  "source": "room:general request:req_xyz ts:2026-02-14T11:00:40",
+  "room": "general",
+  "origin_event_ref": "req_xyz",
+  "tags": ["checks", "commit"],
+  "scope": "repo"
+}

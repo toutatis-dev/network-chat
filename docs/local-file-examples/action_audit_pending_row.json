@@ -1,0 +1,1 @@
+{"action_id":"a1b2c3d4","ts":"2026-02-14T11:04:00","user":"alice","agent_profile":"default","tool":"run_tests","summary":"Run test suite","command_preview":"pytest -q","risk_level":"med","status":"pending","request_id":"req123","room":"general","inputs":{"command":"pytest -q"},"ttl_seconds":86400,"expires_at":"2026-02-15T11:04:00"}

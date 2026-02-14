@@ -1,0 +1,32 @@
+{
+  "id": "default",
+  "name": "Default Agent",
+  "description": "Balanced general assistant profile.",
+  "system_prompt": "You are a pragmatic AI assistant for collaborative chat and planning.",
+  "tool_policy": {
+    "mode": "scoped_allowlist",
+    "require_approval": true,
+    "allowed_tools": [
+      "search_repo",
+      "list_files",
+      "read_file",
+      "run_tests",
+      "run_lint",
+      "run_typecheck",
+      "git_status",
+      "git_diff"
+    ]
+  },
+  "memory_policy": {"scopes": ["private", "repo", "team"]},
+  "routing_policy": {
+    "routes": {
+      "chat_general": {"provider": "gemini", "model": "gemini-2.5-flash"},
+      "memory_rerank": {"provider": "openai", "model": "gpt-4o-mini"},
+      "code_analysis": {"provider": "openai", "model": "gpt-4o-mini"}
+    }
+  },
+  "created_by": "system",
+  "updated_by": "system",
+  "updated_at": "2026-02-14T11:02:00",
+  "version": 1
+}

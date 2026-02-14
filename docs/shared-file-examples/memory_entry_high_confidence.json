@@ -8,5 +8,6 @@
   "source": "room:general request:req_123 ts:2026-02-13T12:00:10",
   "room": "general",
   "origin_event_ref": "req_123",
-  "tags": ["runbook", "rollback"]
+  "tags": ["runbook", "rollback"],
+  "scope": "team"
 }

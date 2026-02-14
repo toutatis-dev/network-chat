@@ -1,0 +1,13 @@
+{
+  "id": "mem_1771012800_private_a1b2c3",
+  "ts": "2026-02-14T11:00:00",
+  "author": "alice",
+  "summary": "I prefer concise AI responses unless I ask for detail.",
+  "topic": "preferences",
+  "confidence": "high",
+  "source": "local:ai-dm request:req_abc ts:2026-02-14T10:59:59",
+  "room": "ai-dm",
+  "origin_event_ref": "req_abc",
+  "tags": ["style", "response"],
+  "scope": "private"
+}

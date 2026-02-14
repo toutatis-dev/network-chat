@@ -1,0 +1,14 @@
+{
+  "default_provider": "gemini",
+  "providers": {
+    "gemini": {"api_key": "", "model": "gemini-2.5-flash"},
+    "openai": {"api_key": "", "model": "gpt-4o-mini"}
+  },
+  "streaming": {
+    "enabled": true,
+    "providers": {
+      "gemini": true,
+      "openai": true
+    }
+  }
+}

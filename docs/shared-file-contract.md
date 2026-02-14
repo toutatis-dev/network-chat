@@ -1,36 +1,29 @@
 # Shared File Contract
 
-This document defines the canonical wire format for shared storage files used by Huddle Chat.
-It is the interoperability contract across clients.
+This document defines the canonical cross-client contract for shared files.
 
 ## Scope
 
-Shared (network authoritative):
-
+Shared/network-authoritative files:
 - `rooms/<room>/messages.jsonl`
-- `rooms/<room>/presence/<presence-id>.json`
+- `rooms/<room>/presence/<presence-id>`
 - `memory/global.jsonl`
 
-Local-only (not part of cross-client compatibility):
+Not in scope here (documented separately):
+- local/internal files in `docs/local-file-contract.md`
 
-- `.local_chat/rooms/ai-dm/messages.jsonl`
-- `.local_chat/ai_config.json`
-- `chat_config.json`
+## Compatibility Model
 
-## Compatibility Policy
-
-This contract follows the "Strict Reader + Additive Writer" model. See `docs/compatibility-policy.md`.
+This contract follows **Strict Reader + Additive Writer**.
+See `docs/compatibility-policy.md`.
 
 ## Event Log: `rooms/<room>/messages.jsonl`
 
 Format:
+- UTF-8 JSONL (one JSON object per line).
+- Canonical delimiter is `\n`.
 
-- UTF-8 text file.
-- One JSON object per line (JSONL).
-- Each row is an event.
-
-Required event fields:
-
+Required fields:
 - `v` (integer schema version)
 - `ts` (string timestamp)
 - `type` (string enum)
@@ -38,7 +31,6 @@ Required event fields:
 - `text` (string)
 
 Allowed `type` values:
-
 - `chat`
 - `me`
 - `system`
@@ -46,7 +38,6 @@ Allowed `type` values:
 - `ai_response`
 
 Optional fields currently used:
-
 - `provider` (string)
 - `model` (string)
 - `request_id` (string)
@@ -54,53 +45,50 @@ Optional fields currently used:
 - `memory_topics_used` (array of strings)
 
 Reader behavior:
-
-- Invalid JSON row: ignore row.
-- Unknown `type`: ignore row.
-- `author`/`text` not strings: ignore row.
-- Missing `v`: treat as current supported version.
-- `v` greater than supported version: ignore row.
-- Unknown optional fields: allowed and preserved in-memory; consumers may ignore them.
+- Invalid JSON row: skip row.
+- Non-object row: skip row.
+- Unknown `type`: skip row.
+- `author`/`text` not strings: skip row.
+- `v` missing: treat as current supported version.
+- `v` present but non-integer: skip row.
+- `v` greater than supported version: skip row.
+- `ts` missing/non-string: normalize to string timestamp in memory.
+- Unknown optional fields: tolerated.
 
 Writer behavior:
+- Emit one newline-terminated JSON object per event row.
+- Emit required fields for app-generated events.
+- Emit current schema version in `v`.
 
-- Writes one newline-terminated JSON object per event row.
-- Includes required fields for app-generated events.
-- Emits current schema version in `v`.
-
-## Presence: `rooms/<room>/presence/<presence-id>.json`
+## Presence: `rooms/<room>/presence/<presence-id>`
 
 Format:
-
 - UTF-8 JSON object per file.
-- One file per active client identity in a room.
+- One file per active client identity per room.
 
 Fields written by current client:
-
 - `name` (string)
 - `color` (string)
-- `last_seen` (number, epoch seconds)
 - `status` (string)
+- `room` (string)
+- `last_seen` (number, epoch seconds)
 
 Reader behavior:
-
-- Non-JSON or unreadable file: skip file.
+- Non-JSON/unreadable file: skip file.
 - Missing/invalid fields: sanitize where possible.
-- Stale presence files may be deleted by readers/writers.
+- Stale files may be removed by clients.
+- Repeated malformed files may be dropped/quarantined by hardened clients.
 
 Path safety:
-
-- `<presence-id>` must be sanitized to prevent path traversal and invalid characters.
+- `<presence-id>` must be sanitized to prevent traversal/invalid path generation.
 
 ## Shared Memory: `memory/global.jsonl`
 
 Format:
-
 - UTF-8 JSONL.
 - One memory entry per line.
 
-Current entry shape:
-
+Current app-generated entry shape:
 - `id` (string)
 - `ts` (string timestamp)
 - `author` (string)
@@ -111,29 +99,24 @@ Current entry shape:
 - `room` (string)
 - `origin_event_ref` (string)
 - `tags` (array of strings)
+- `scope` (string; typically `team` for shared file)
 
 Reader behavior:
-
-- Invalid JSON row: ignore row.
-- Non-object row: ignore row.
-- Unknown fields: allowed.
+- Invalid JSON row: skip row.
+- Non-object row: skip row.
+- Unknown fields: tolerated.
 
 Writer behavior:
-
-- Writes newline-terminated JSON object rows.
-- Emits normalized `confidence` enum (`low`/`med`/`high`) for app-generated entries.
+- Emit newline-terminated JSON objects.
+- Emit normalized confidence enum for app-generated entries.
 
 ## Encoding and Newlines
 
-- UTF-8 is required.
-- `\n` line delimiters are canonical for JSONL.
+- UTF-8 required.
+- `\n` canonical for JSONL.
 - Readers should tolerate CRLF/LF variations.
 
 ## Versioning
 
-- Current event schema: `v=1`.
-- Breaking changes require:
-  - schema version update,
-  - this document update,
-  - example updates,
-  - conformance test updates.
+- Current event schema version: `v=1`.
+- Breaking changes require schema/version updates and synchronized docs/examples/tests.

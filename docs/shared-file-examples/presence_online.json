@@ -1,6 +1,7 @@
 {
   "name": "alice",
   "color": "green",
+  "room": "general",
   "last_seen": 1771012800.123,
   "status": "on-call"
 }
