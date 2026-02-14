@@ -152,6 +152,41 @@ def test_get_online_users_all_rooms_drops_malformed_presence(tmp_path):
     assert not malformed_path.exists()
 
 
+def test_refresh_presence_sidebar_is_rate_limited(tmp_path):
+    app = build_runtime_app(tmp_path)
+    calls = {"count": 0}
+
+    def fake_get_online():
+        calls["count"] += 1
+        return {}
+
+    app.get_online_users_all_rooms = fake_get_online
+    app.refresh_presence_sidebar(force=True)
+    app.refresh_presence_sidebar()
+    assert calls["count"] == 1
+
+
+def test_repeated_malformed_presence_gets_quarantined_when_enabled(tmp_path, monkeypatch):
+    app = build_runtime_app(tmp_path)
+    monkeypatch.setenv("HUDDLE_PRESENCE_QUARANTINE", "1")
+    presence_dir = app.get_presence_dir("general")
+    presence_dir.mkdir(parents=True, exist_ok=True)
+    malformed_name = "badpresence1234"
+    malformed_path = presence_dir / malformed_name
+
+    for _ in range(chat.PRESENCE_MALFORMED_QUARANTINE_THRESHOLD):
+        malformed_path.write_text("{bad-json", encoding="utf-8")
+        app.get_online_users("general")
+
+    quarantine_dir = (
+        Path(app.rooms_root) / chat.PRESENCE_QUARANTINE_DIR_NAME / "general"
+    )
+    quarantined = list(quarantine_dir.glob(f"{malformed_name}.*.badjson"))
+    assert quarantined
+    assert app.presence_malformed_dropped >= chat.PRESENCE_MALFORMED_QUARANTINE_THRESHOLD
+    assert app.presence_quarantined >= 1
+
+
 def test_update_sidebar_shows_user_room_suffix(tmp_path):
     app = build_runtime_app(tmp_path)
     app.online_users = {

@@ -56,7 +56,10 @@ from huddle_chat.constants import (
     MEMORY_PRIVATE_FILE,
     MEMORY_REPO_FILE,
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
+    PRESENCE_MALFORMED_QUARANTINE_THRESHOLD,
+    PRESENCE_QUARANTINE_DIR_NAME,
     THEMES,
+    PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS,
 )
 from huddle_chat.commands.registry import CommandRegistry
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
@@ -172,6 +175,11 @@ class ChatApp:
         self.agent_draft_active = False
         self.agent_draft: dict[str, Any] | None = None
         self.pending_actions: dict[str, dict[str, Any]] = {}
+        self.presence_malformed_dropped = 0
+        self.presence_quarantined = 0
+        self.presence_write_failures = 0
+        self._presence_malformed_counts: dict[str, int] = {}
+        self._last_presence_sidebar_refresh_at = 0.0
         self.storage_service = StorageService(self)
         self.memory_service = MemoryService(self)
         self.ai_service = AIService(self)
@@ -821,11 +829,72 @@ class ChatApp:
         return online
 
     def _drop_malformed_presence(self, path: Path) -> None:
+        self.ensure_presence_health_initialized()
+        self.presence_malformed_dropped += 1
+        key = str(path.name)
+        self._presence_malformed_counts[key] = (
+            self._presence_malformed_counts.get(key, 0) + 1
+        )
+        if self._should_quarantine_malformed_presence(path):
+            if self._quarantine_malformed_presence(path):
+                return
         try:
             path.unlink(missing_ok=True)
         except OSError:
             # Presence files are ephemeral; ignore malformed row cleanup failures.
             pass
+
+    def ensure_presence_health_initialized(self) -> None:
+        if not hasattr(self, "presence_malformed_dropped"):
+            self.presence_malformed_dropped = 0
+        if not hasattr(self, "presence_quarantined"):
+            self.presence_quarantined = 0
+        if not hasattr(self, "presence_write_failures"):
+            self.presence_write_failures = 0
+        if not hasattr(self, "_presence_malformed_counts"):
+            self._presence_malformed_counts = {}
+        if not hasattr(self, "_last_presence_sidebar_refresh_at"):
+            self._last_presence_sidebar_refresh_at = 0.0
+
+    def _should_quarantine_malformed_presence(self, path: Path) -> bool:
+        flag = str(os.getenv("HUDDLE_PRESENCE_QUARANTINE", "")).strip().lower()
+        if flag not in {"1", "true", "yes", "on"}:
+            return False
+        count = self._presence_malformed_counts.get(str(path.name), 0)
+        return count >= PRESENCE_MALFORMED_QUARANTINE_THRESHOLD
+
+    def _quarantine_malformed_presence(self, path: Path) -> bool:
+        room = self.sanitize_room_name(path.parent.parent.name)
+        quarantine_dir = Path(self.rooms_root) / PRESENCE_QUARANTINE_DIR_NAME / room
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        target = quarantine_dir / f"{path.name}.{stamp}.badjson"
+        try:
+            os.makedirs(quarantine_dir, exist_ok=True)
+            os.replace(path, target)
+            self.presence_quarantined += 1
+            return True
+        except OSError:
+            return False
+
+    def _write_presence_atomic(self, presence_path: Path, data: dict[str, Any]) -> bool:
+        self.ensure_presence_health_initialized()
+        tmp_name = f".{presence_path.name}.tmp-{os.getpid()}-{uuid4().hex[:8]}"
+        tmp_path = presence_path.with_name(tmp_name)
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, presence_path)
+            return True
+        except OSError:
+            self.presence_write_failures += 1
+            return False
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def heartbeat(self) -> None:
         current_presence_path: Path | None = None
@@ -870,8 +939,8 @@ class ChatApp:
                     "status": self.status,
                     "room": room,
                 }
-                with open(presence_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f)
+                if not self._write_presence_atomic(presence_path, data):
+                    raise OSError("atomic presence write failed")
             except (OSError, ValueError) as exc:
                 logger.warning("Failed heartbeat write: %s", exc)
 
@@ -926,7 +995,14 @@ class ChatApp:
         self.sidebar_control.text = cast(Any, fragments)
         self.application.invalidate()
 
-    def refresh_presence_sidebar(self) -> None:
+    def refresh_presence_sidebar(self, force: bool = False) -> None:
+        self.ensure_presence_health_initialized()
+        now = time.monotonic()
+        if not force:
+            since_last = now - self._last_presence_sidebar_refresh_at
+            if since_last < PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS:
+                return
+        self._last_presence_sidebar_refresh_at = now
         self.online_users = self.get_online_users_all_rooms()
         self.update_sidebar()
 
@@ -1689,7 +1765,7 @@ class ChatApp:
 
     def force_heartbeat(self) -> None:
         if self.is_local_room():
-            self.refresh_presence_sidebar()
+            self.refresh_presence_sidebar(force=True)
             return
         try:
             presence_path = self.get_presence_path()
@@ -1700,9 +1776,9 @@ class ChatApp:
                 "status": self.status,
                 "room": self.current_room,
             }
-            with open(presence_path, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            self.refresh_presence_sidebar()
+            if not self._write_presence_atomic(presence_path, data):
+                raise OSError("atomic presence write failed")
+            self.refresh_presence_sidebar(force=True)
         except (OSError, ValueError) as exc:
             logger.warning("Failed forced heartbeat update: %s", exc)
 
