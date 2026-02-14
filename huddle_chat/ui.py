@@ -241,7 +241,9 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, ["list", "add", "remove"])
         return []
 
-    def get_completions(self, document: Any, complete_event: Any) -> Iterable[Completion]:
+    def get_completions(
+        self, document: Any, complete_event: Any
+    ) -> Iterable[Completion]:
         text = document.text_before_cursor
         if re.match(r"^/aiconfig(\s|$)", text):
             yield from self._complete_aiconfig_command(text)
@@ -346,9 +348,7 @@ class ChatLexer(Lexer):
     def __init__(self, app_ref: "ChatApp") -> None:
         self.app_ref = app_ref
 
-    def lex_document(
-        self, document: Any
-    ) -> Callable[[int], StyleAndTextTuples]:
+    def lex_document(self, document: Any) -> Callable[[int], StyleAndTextTuples]:
         def get_line_tokens(line_num: int) -> StyleAndTextTuples:
             try:
                 line_text = document.lines[line_num]
