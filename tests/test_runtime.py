@@ -140,6 +140,18 @@ def test_get_online_users_all_rooms_includes_room_metadata(tmp_path):
     assert online_users["ccc22222dddd"]["room"] == "dev"
 
 
+def test_get_online_users_all_rooms_drops_malformed_presence(tmp_path):
+    app = build_runtime_app(tmp_path)
+    general_presence = app.get_presence_dir("general")
+    general_presence.mkdir(parents=True, exist_ok=True)
+    malformed_path = general_presence / "badpresence1234"
+    malformed_path.write_text("{not-json", encoding="utf-8")
+
+    online_users = app.get_online_users_all_rooms()
+    assert online_users == {}
+    assert not malformed_path.exists()
+
+
 def test_update_sidebar_shows_user_room_suffix(tmp_path):
     app = build_runtime_app(tmp_path)
     app.online_users = {

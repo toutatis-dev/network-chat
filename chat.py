@@ -746,8 +746,10 @@ class ChatApp:
                 if entry is not None:
                     client_id = str(entry.get("client_id", ""))
                     online[client_id] = entry
-            except (OSError, json.JSONDecodeError, ValueError) as exc:
+            except OSError as exc:
                 logger.warning("Failed to process presence file %s: %s", path, exc)
+            except (json.JSONDecodeError, ValueError):
+                self._drop_malformed_presence(path)
 
         return online
 
@@ -812,9 +814,18 @@ class ChatApp:
                     prior_seen = float(seen.get("last_seen", 0.0)) if seen else 0.0
                     if seen is None or current_seen >= prior_seen:
                         online[client_id] = entry
-                except (OSError, json.JSONDecodeError, ValueError) as exc:
+                except OSError as exc:
                     logger.warning("Failed to process presence file %s: %s", path, exc)
+                except (json.JSONDecodeError, ValueError):
+                    self._drop_malformed_presence(path)
         return online
+
+    def _drop_malformed_presence(self, path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # Presence files are ephemeral; ignore malformed row cleanup failures.
+            pass
 
     def heartbeat(self) -> None:
         current_presence_path: Path | None = None

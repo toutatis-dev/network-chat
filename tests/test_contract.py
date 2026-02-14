@@ -137,6 +137,7 @@ def test_get_online_users_skips_malformed_presence_files(tmp_path):
     only_user = next(iter(online.values()))
     assert only_user["name"] == "Alice"
     assert only_user["status"] == "online"
+    assert not (presence_dir / "badclient456").exists()
 
 
 def test_load_memory_entries_skips_invalid_rows(tmp_path):
