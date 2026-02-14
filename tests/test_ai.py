@@ -50,6 +50,13 @@ def build_ai_app(tmp_path: Path) -> chat.ChatApp:
             "gemini": {"api_key": "g-key", "model": "gemini-2.5-flash"},
             "openai": {"api_key": "o-key", "model": "gpt-4o-mini"},
         },
+        "streaming": {
+            "enabled": False,
+            "providers": {
+                "gemini": True,
+                "openai": True,
+            },
+        },
     }
     app.ensure_paths()
     app.ensure_local_paths()
@@ -100,6 +107,24 @@ def test_aiconfig_set_key_accepts_provider_first_syntax(tmp_path):
     app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
     app.handle_aiconfig_command("gemini set-key NEWKEY")
     assert app.ai_config["providers"]["gemini"]["api_key"] == "NEWKEY"
+    assert called["saved"] == 1
+
+
+def test_aiconfig_streaming_on_updates_local_config(tmp_path):
+    app = build_ai_app(tmp_path)
+    called = {"saved": 0}
+    app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
+    app.handle_aiconfig_command("streaming on")
+    assert app.ai_config["streaming"]["enabled"] is True
+    assert called["saved"] == 1
+
+
+def test_aiconfig_streaming_provider_toggle_updates_local_config(tmp_path):
+    app = build_ai_app(tmp_path)
+    called = {"saved": 0}
+    app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
+    app.handle_aiconfig_command("streaming provider openai off")
+    assert app.ai_config["streaming"]["providers"]["openai"] is False
     assert called["saved"] == 1
 
 
@@ -501,3 +526,89 @@ def test_run_ai_request_with_retry_interrupts_on_cancel(tmp_path):
     assert answer is None
     assert err == "AI request cancelled."
     assert elapsed < 0.7
+
+
+def test_ai_streaming_uses_stream_provider_and_persists_final_response_only(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.ai_config["streaming"]["enabled"] = True
+    written: list[tuple[str | None, dict]] = []
+
+    def fake_write(payload, room=None):
+        if isinstance(payload, dict):
+            written.append((room, payload))
+        return True
+
+    stream_calls = {"count": 0}
+
+    def fake_stream_provider(**kwargs):
+        stream_calls["count"] += 1
+        kwargs["on_token"]("hello ")
+        kwargs["on_token"]("world")
+        return "hello world"
+
+    app.write_to_file = fake_write
+    app.call_ai_provider_stream = fake_stream_provider
+    app.call_ai_provider = lambda **kwargs: "non-stream"
+    with patch.object(
+        chat,
+        "Thread",
+        side_effect=lambda target, args, daemon: SimpleNamespace(
+            start=lambda: target(*args)
+        ),
+    ):
+        app.handle_ai_command("--no-memory say hello")
+
+    assert stream_calls["count"] == 1
+    assert [entry[1]["type"] for entry in written] == ["ai_prompt", "ai_response"]
+    assert written[1][1]["text"] == "hello world"
+
+
+def test_ai_streaming_cancel_does_not_persist_partial_response(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.ensure_services_initialized()
+    app.ai_config["streaming"]["enabled"] = True
+    written: list[tuple[str | None, dict]] = []
+
+    def fake_write(payload, room=None):
+        if isinstance(payload, dict):
+            written.append((room, payload))
+        return True
+
+    app.write_to_file = fake_write
+
+    def slow_stream_provider(**kwargs):
+        kwargs["on_token"]("partial")
+        time.sleep(1.0)
+        return "late"
+
+    app.call_ai_provider_stream = slow_stream_provider
+    request_id = app.start_ai_request_state(
+        provider="gemini",
+        model="gemini-2.5-flash",
+        target_room="general",
+        scope="room",
+    )
+    assert request_id is not None
+
+    def trigger_cancel():
+        time.sleep(0.1)
+        app.request_ai_cancel()
+
+    threading.Thread(target=trigger_cancel, daemon=True).start()
+    app.process_ai_response(
+        request_id=request_id,
+        provider="gemini",
+        api_key="k",
+        model="gemini-2.5-flash",
+        prompt="hello",
+        target_room="general",
+        is_private=False,
+        disable_memory=True,
+        action_mode=False,
+        memory_scopes=["team"],
+    )
+    assert all(entry[1]["type"] != "ai_response" for entry in written)
+    assert any(
+        entry[1]["type"] == "system" and "cancelled" in entry[1]["text"].lower()
+        for entry in written
+    )

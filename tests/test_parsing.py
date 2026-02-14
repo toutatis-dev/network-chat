@@ -272,6 +272,34 @@ def test_aiconfig_provider_first_completion_suggests_set_actions(app_instance):
     assert "set-model" in texts
 
 
+def test_aiconfig_streaming_completion_suggests_stream_controls(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/aiconfig streaming ", cursor_position=20),
+            CompleteEvent(),
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "status" in texts
+    assert "on" in texts
+    assert "provider" in texts
+
+
+def test_aiconfig_streaming_provider_completion_suggests_on_off(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    text = "/aiconfig streaming provider openai "
+    completions = list(
+        completer.get_completions(
+            Document(text, cursor_position=len(text)),
+            CompleteEvent(),
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "on" in texts
+    assert "off" in texts
+
+
 def test_parse_event_line_rejects_unknown_event_type(app_instance):
     event = app_instance.parse_event_line(
         '{"v":1,"ts":"2026-01-01T00:00:00","type":"mystery","author":"a","text":"b"}'

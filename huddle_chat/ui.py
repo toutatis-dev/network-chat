@@ -128,7 +128,7 @@ class SlashCompleter(Completer):
         tokens = text.split()
         trailing_space = text.endswith(" ")
         providers = self._provider_names()
-        subcommands = ["set-key", "set-model", "set-provider"]
+        subcommands = ["set-key", "set-model", "set-provider", "streaming"]
 
         if len(tokens) == 1 and not trailing_space:
             return self._yield_candidates(text, ["/aiconfig"])
@@ -159,6 +159,23 @@ class SlashCompleter(Completer):
                 return self._yield_candidates(
                     current, self.model_hints.get(provider, [])
                 )
+            return []
+
+        if first == "streaming":
+            if len(values) == 2:
+                return self._yield_candidates(
+                    current,
+                    ["status", "on", "off", "provider"] + providers,
+                )
+            second_stream = values[2] if len(values) > 2 else ""
+            if second_stream == "provider":
+                if len(values) == 3:
+                    return self._yield_candidates(current, providers)
+                if len(values) == 4:
+                    return self._yield_candidates(current, ["on", "off"])
+                return []
+            if second_stream in providers and len(values) == 3:
+                return self._yield_candidates(current, ["on", "off"])
             return []
 
         if first in providers:

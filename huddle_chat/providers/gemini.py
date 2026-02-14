@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 
@@ -31,3 +32,31 @@ class GeminiClient:
                 if text:
                     return text
         raise RuntimeError("Gemini response did not contain text.")
+
+    def generate_stream(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        prompt: str,
+        on_token: Callable[[str], None],
+    ) -> str:
+        try:
+            from google import genai  # type: ignore[import-not-found]
+        except Exception as exc:
+            raise RuntimeError(
+                "Gemini streaming requires the 'google-genai' package."
+            ) from exc
+
+        client = genai.Client(api_key=api_key)
+        chunks: list[str] = []
+        stream = client.models.generate_content_stream(model=model, contents=prompt)
+        for chunk in stream:
+            text = getattr(chunk, "text", "")
+            if isinstance(text, str) and text:
+                chunks.append(text)
+                on_token(text)
+        answer = "".join(chunks).strip()
+        if not answer:
+            raise RuntimeError("Gemini response was empty.")
+        return answer

@@ -14,6 +14,20 @@ class AIService:
     def __init__(self, app: "ChatApp") -> None:
         self.app = app
 
+    def is_streaming_enabled(self, provider: str) -> bool:
+        streaming = self.app.ai_config.get("streaming", {})
+        if not isinstance(streaming, dict):
+            return False
+        if not bool(streaming.get("enabled", False)):
+            return False
+        providers = streaming.get("providers", {})
+        if not isinstance(providers, dict):
+            return True
+        provider_value = providers.get(provider)
+        if isinstance(provider_value, bool):
+            return provider_value
+        return True
+
     def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
         try:
             tokens = shlex.split(arg_text)
@@ -147,7 +161,15 @@ class AIService:
         return False
 
     def run_ai_request_with_retry(
-        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+        self,
+        request_id: str,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        *,
+        stream: bool = False,
+        on_token: Callable[[str], None] | None = None,
     ) -> tuple[str | None, str | None]:
         self.app.ensure_ai_state_initialized()
         if self.app.is_ai_request_cancelled(request_id):
@@ -159,6 +181,8 @@ class AIService:
                 api_key=api_key,
                 model=model,
                 prompt=prompt,
+                stream=stream,
+                on_token=on_token,
             )
             if call_error:
                 raise call_error
@@ -186,6 +210,8 @@ class AIService:
                     api_key=api_key,
                     model=model,
                     prompt=prompt,
+                    stream=stream,
+                    on_token=on_token,
                 )
                 if retry_error:
                     raise retry_error
@@ -195,19 +221,36 @@ class AIService:
                 return None, f"AI request failed after retry: {retry_exc}"
 
     def _call_provider_interruptible(
-        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+        self,
+        request_id: str,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        *,
+        stream: bool = False,
+        on_token: Callable[[str], None] | None = None,
     ) -> tuple[str | None, Exception | None]:
         result: dict[str, Any] = {"answer": None, "error": None}
         finished = ThreadEvent()
 
         def worker() -> None:
             try:
-                result["answer"] = self.app.call_ai_provider(
-                    provider=provider,
-                    api_key=api_key,
-                    model=model,
-                    prompt=prompt,
-                )
+                if stream and on_token is not None:
+                    result["answer"] = self.app.call_ai_provider_stream(
+                        provider=provider,
+                        api_key=api_key,
+                        model=model,
+                        prompt=prompt,
+                        on_token=on_token,
+                    )
+                else:
+                    result["answer"] = self.app.call_ai_provider(
+                        provider=provider,
+                        api_key=api_key,
+                        model=model,
+                        prompt=prompt,
+                    )
             except Exception as exc:
                 result["error"] = exc
             finally:
@@ -382,6 +425,8 @@ class AIService:
             api_key=api_key,
             model=model,
             prompt=effective_prompt,
+            stream=self.is_streaming_enabled(provider),
+            on_token=self._build_stream_preview_handler(request_id),
         )
         if error_text:
             error_event = self.app.build_event("system", error_text)
@@ -417,6 +462,8 @@ class AIService:
                 api_key=api_key,
                 model=model,
                 prompt=action_prompt,
+                stream=False,
+                on_token=None,
             )
             if action_error:
                 action_warning = f"Action proposal failed: {action_error}"
@@ -485,3 +532,22 @@ class AIService:
             )
         self.app.clear_ai_request_state(request_id)
         self.app.refresh_output_from_events()
+
+    def _build_stream_preview_handler(self, request_id: str) -> Callable[[str], None]:
+        chunks: list[str] = []
+        last_emit = 0.0
+
+        def on_token(token: str) -> None:
+            nonlocal last_emit
+            if self.app.is_ai_request_cancelled(request_id):
+                return
+            chunks.append(token)
+            now = time.monotonic()
+            if now - last_emit < 0.08:
+                return
+            last_emit = now
+            preview = "".join(chunks).strip()
+            if preview:
+                self.app.set_ai_preview_text(request_id, preview)
+
+        return on_token

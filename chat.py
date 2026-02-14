@@ -5,6 +5,7 @@ import asyncio
 import string
 import re
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 from datetime import datetime
 from threading import Event, Lock, Thread
@@ -527,6 +528,13 @@ class ChatApp:
                 "gemini": {"api_key": "", "model": "gemini-2.5-flash"},
                 "openai": {"api_key": "", "model": "gpt-4o-mini"},
             },
+            "streaming": {
+                "enabled": True,
+                "providers": {
+                    "gemini": True,
+                    "openai": True,
+                },
+            },
         }
 
     def load_ai_config_data(self) -> dict[str, Any]:
@@ -554,6 +562,19 @@ class ChatApp:
         default_provider = str(loaded.get("default_provider", "")).strip().lower()
         if default_provider in merged["providers"]:
             merged["default_provider"] = default_provider
+        loaded_streaming = loaded.get("streaming", {})
+        if isinstance(loaded_streaming, dict):
+            loaded_enabled = loaded_streaming.get("enabled")
+            if isinstance(loaded_enabled, bool):
+                merged["streaming"]["enabled"] = loaded_enabled
+            loaded_streaming_providers = loaded_streaming.get("providers", {})
+            if isinstance(loaded_streaming_providers, dict):
+                for provider_name in ("gemini", "openai"):
+                    provider_enabled = loaded_streaming_providers.get(provider_name)
+                    if isinstance(provider_enabled, bool):
+                        merged["streaming"]["providers"][
+                            provider_name
+                        ] = provider_enabled
         return merged
 
     def save_ai_config_data(self) -> None:
@@ -588,6 +609,25 @@ class ChatApp:
             model=model,
             prompt=prompt,
             post_json_request=self.post_json_request,
+        )
+
+    def call_ai_provider_stream(
+        self,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        on_token: Callable[[str], None],
+    ) -> str:
+        self.ensure_services_initialized()
+        client = self.ai_provider_clients.get(provider)
+        if client is None:
+            raise ValueError(f"Unsupported provider '{provider}'")
+        return client.generate_stream(
+            api_key=api_key,
+            model=model,
+            prompt=prompt,
+            on_token=on_token,
         )
 
     def post_json_request(
@@ -1684,11 +1724,25 @@ class ChatApp:
             time.sleep(0.5)
 
     def run_ai_request_with_retry(
-        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+        self,
+        request_id: str,
+        provider: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        *,
+        stream: bool = False,
+        on_token: Callable[[str], None] | None = None,
     ) -> tuple[str | None, str | None]:
         self.ensure_services_initialized()
         return self.ai_service.run_ai_request_with_retry(
-            request_id, provider, api_key, model, prompt
+            request_id,
+            provider,
+            api_key,
+            model,
+            prompt,
+            stream=stream,
+            on_token=on_token,
         )
 
     def handle_ai_command(self, args: str) -> None:

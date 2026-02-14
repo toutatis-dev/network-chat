@@ -9,10 +9,37 @@ class CommandOpsService:
     def __init__(self, app: "ChatApp"):
         self.app = app
 
+    def _ensure_streaming_config(self) -> dict[str, Any]:
+        streaming = self.app.ai_config.get("streaming")
+        if not isinstance(streaming, dict):
+            streaming = {}
+            self.app.ai_config["streaming"] = streaming
+        if not isinstance(streaming.get("enabled"), bool):
+            streaming["enabled"] = False
+        providers = streaming.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+            streaming["providers"] = providers
+        for provider in ("gemini", "openai"):
+            if not isinstance(providers.get(provider), bool):
+                providers[provider] = True
+        return streaming
+
+    def get_streaming_summary(self) -> str:
+        streaming = self._ensure_streaming_config()
+        enabled = "on" if bool(streaming.get("enabled")) else "off"
+        providers = streaming.get("providers", {})
+        assert isinstance(providers, dict)
+        provider_parts: list[str] = []
+        for provider in ("gemini", "openai"):
+            provider_enabled = "on" if bool(providers.get(provider, True)) else "off"
+            provider_parts.append(f"{provider}={provider_enabled}")
+        return f"streaming={enabled}; providers: {', '.join(provider_parts)}"
+
     def get_ai_provider_summary(self) -> str:
         providers = self.app.ai_config.get("providers", {})
         default_provider = str(self.app.ai_config.get("default_provider", "gemini"))
-        parts: list[str] = [f"default={default_provider}"]
+        parts: list[str] = [f"default={default_provider}", self.get_streaming_summary()]
         for provider in ("gemini", "openai"):
             data = providers.get(provider, {})
             if not isinstance(data, dict):
@@ -97,8 +124,58 @@ class CommandOpsService:
             self.app.append_system_message(f"Default AI provider set to {provider}.")
             return
 
+        if action == "streaming":
+            providers_set = {"gemini", "openai"}
+            streaming = self._ensure_streaming_config()
+            provider_flags = streaming["providers"]
+
+            if len(tokens) == 1 or (
+                len(tokens) == 2 and tokens[1].strip().lower() == "status"
+            ):
+                self.app.append_system_message(
+                    f"AI config: {self.get_streaming_summary()}"
+                )
+                return
+
+            if len(tokens) == 2 and tokens[1].strip().lower() in {"on", "off"}:
+                enabled = tokens[1].strip().lower() == "on"
+                streaming["enabled"] = enabled
+                self.app.save_ai_config_data()
+                self.app.append_system_message(
+                    f"Streaming set to {'on' if enabled else 'off'}."
+                )
+                return
+
+            if len(tokens) == 3:
+                provider = tokens[1].strip().lower()
+                value = tokens[2].strip().lower()
+                if provider in providers_set and value in {"on", "off"}:
+                    provider_flags[provider] = value == "on"
+                    self.app.save_ai_config_data()
+                    self.app.append_system_message(
+                        f"Streaming for {provider} set to {value}."
+                    )
+                    return
+
+            if len(tokens) == 4 and tokens[1].strip().lower() == "provider":
+                provider = tokens[2].strip().lower()
+                value = tokens[3].strip().lower()
+                if provider in providers_set and value in {"on", "off"}:
+                    provider_flags[provider] = value == "on"
+                    self.app.save_ai_config_data()
+                    self.app.append_system_message(
+                        f"Streaming for {provider} set to {value}."
+                    )
+                    return
+
+            self.app.append_system_message(
+                "Usage: /aiconfig streaming [status|on|off|<provider> <on|off>|provider <provider> <on|off>]"
+            )
+            return
+
         self.app.append_system_message(
-            "Usage: /aiconfig [set-key <provider> <key> | set-model <provider> <model> | set-provider <provider>] "
+            "Usage: /aiconfig [set-key <provider> <key> | set-model <provider> <model> | "
+            "set-provider <provider> | streaming <...>] "
             "(also accepts: <provider> set-key <key>, <provider> set-model <model>)"
         )
 
