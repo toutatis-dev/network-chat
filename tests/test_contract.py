@@ -110,6 +110,17 @@ def test_write_to_file_writes_jsonl_row_with_newline(tmp_path, monkeypatch):
     assert row["text"] == "hello world"
 
 
+def test_append_jsonl_row_uses_locked_append(tmp_path, monkeypatch):
+    app = build_contract_app(tmp_path)
+    monkeypatch.setattr(chat, "portalocker", FakePortalocker())
+    target = tmp_path / "audit.jsonl"
+    ok = app.append_jsonl_row(target, {"k": "v"})
+    assert ok is True
+    rows = target.read_text(encoding="utf-8").strip().splitlines()
+    assert len(rows) == 1
+    assert json.loads(rows[0]) == {"k": "v"}
+
+
 def test_get_online_users_skips_malformed_presence_files(tmp_path):
     app = build_contract_app(tmp_path)
     presence_dir = app.get_presence_dir("general")

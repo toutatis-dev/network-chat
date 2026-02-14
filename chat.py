@@ -45,7 +45,10 @@ from huddle_chat.constants import (
     LOCAL_CHAT_ROOT,
     LOCAL_MEMORY_ROOT,
     LOCAL_ROOMS_ROOT,
+    LOCK_BACKOFF_BASE_SECONDS,
+    LOCK_BACKOFF_MAX_SECONDS,
     LOCK_MAX_ATTEMPTS as DEFAULT_LOCK_MAX_ATTEMPTS,
+    LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
     MEMORY_DIR_NAME,
@@ -477,17 +480,37 @@ class ChatApp:
             logger.warning("Failed ensuring agent paths: %s", exc)
 
     def append_jsonl_row(self, path: Path, row: dict[str, Any]) -> bool:
-        if not hasattr(self, "_jsonl_append_lock"):
-            self._jsonl_append_lock = Lock()
-        try:
-            with self._jsonl_append_lock:
-                with open(path, "a", encoding="utf-8") as f:
+        self.ensure_locking_dependency()
+        assert portalocker is not None
+
+        max_attempts = int(getattr(self, "lock_max_attempts", LOCK_MAX_ATTEMPTS))
+        for attempt in range(max_attempts):
+            try:
+                with portalocker.Lock(
+                    str(path),
+                    mode="a",
+                    timeout=LOCK_TIMEOUT_SECONDS,
+                    fail_when_locked=True,
+                    encoding="utf-8",
+                ) as f:
                     f.write(json.dumps(row, ensure_ascii=True) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
-            return True
-        except OSError:
-            return False
+                return True
+            except portalocker.exceptions.LockException:
+                pass
+            except OSError:
+                pass
+
+            if attempt == max_attempts - 1:
+                break
+            delay = min(
+                LOCK_BACKOFF_MAX_SECONDS,
+                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
+            )
+            time.sleep(delay)
+
+        return False
 
     def get_default_ai_config(self) -> dict[str, Any]:
         return {
