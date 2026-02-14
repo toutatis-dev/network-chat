@@ -58,6 +58,8 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        $ErrorActionPreference = "Stop"
         echo "--- Formatting ---"
         black chat.py huddle_chat tests --check
         echo "--- Linting ---"

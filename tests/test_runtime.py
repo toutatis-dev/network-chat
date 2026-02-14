@@ -166,7 +166,9 @@ def test_refresh_presence_sidebar_is_rate_limited(tmp_path):
     assert calls["count"] == 1
 
 
-def test_repeated_malformed_presence_gets_quarantined_when_enabled(tmp_path, monkeypatch):
+def test_repeated_malformed_presence_gets_quarantined_when_enabled(
+    tmp_path, monkeypatch
+):
     app = build_runtime_app(tmp_path)
     monkeypatch.setenv("HUDDLE_PRESENCE_QUARANTINE", "1")
     presence_dir = app.get_presence_dir("general")
@@ -183,7 +185,9 @@ def test_repeated_malformed_presence_gets_quarantined_when_enabled(tmp_path, mon
     )
     quarantined = list(quarantine_dir.glob(f"{malformed_name}.*.badjson"))
     assert quarantined
-    assert app.presence_malformed_dropped >= chat.PRESENCE_MALFORMED_QUARANTINE_THRESHOLD
+    assert (
+        app.presence_malformed_dropped >= chat.PRESENCE_MALFORMED_QUARANTINE_THRESHOLD
+    )
     assert app.presence_quarantined >= 1
 
 

@@ -89,9 +89,27 @@ def test_format_pending_actions_reports_terminal_summary():
     app.name = "tester"
     app.current_room = "general"
     app.pending_actions = {
-        "a1": {"action_id": "a1", "tool": "git_status", "summary": "x", "status": "pending", "command_preview": "git_status {}"},
-        "a2": {"action_id": "a2", "tool": "git_diff", "summary": "y", "status": "expired", "command_preview": "git_diff {}"},
-        "a3": {"action_id": "a3", "tool": "run_tests", "summary": "z", "status": "failed", "command_preview": "run_tests {}"},
+        "a1": {
+            "action_id": "a1",
+            "tool": "git_status",
+            "summary": "x",
+            "status": "pending",
+            "command_preview": "git_status {}",
+        },
+        "a2": {
+            "action_id": "a2",
+            "tool": "git_diff",
+            "summary": "y",
+            "status": "expired",
+            "command_preview": "git_diff {}",
+        },
+        "a3": {
+            "action_id": "a3",
+            "tool": "run_tests",
+            "summary": "z",
+            "status": "failed",
+            "command_preview": "run_tests {}",
+        },
     }
     service = ActionService(app)
     text = service.format_pending_actions()
