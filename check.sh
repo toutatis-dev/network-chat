@@ -39,10 +39,16 @@ fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo "--- 1. Formatting Check (Black --check) ---"
-  "$PYTHON_EXE" -m black --check $TARGETS
+  mapfile -t PY_FILES < <(find $TARGETS -type f -name "*.py" | sort)
+  for file in "${PY_FILES[@]}"; do
+    "$PYTHON_EXE" -m black --check "$file"
+  done
 else
   echo "--- 1. Formatting (Black) ---"
-  "$PYTHON_EXE" -m black $TARGETS
+  mapfile -t PY_FILES < <(find $TARGETS -type f -name "*.py" | sort)
+  for file in "${PY_FILES[@]}"; do
+    "$PYTHON_EXE" -m black "$file"
+  done
 fi
 
 echo -e "\n--- 2. Linting (Flake8) ---"
