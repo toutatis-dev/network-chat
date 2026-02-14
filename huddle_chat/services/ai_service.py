@@ -287,7 +287,13 @@ class AIService:
 
         parsed, parse_error = self.parse_ai_args(args)
         if parse_error:
-            self.app.append_system_message(parse_error)
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem=parse_error,
+                    why="AI command parsing failed due to missing/invalid flags or prompt.",
+                    next_step="Run /help ai and retry with one of the documented examples.",
+                )
+            )
             return
 
         task_class = self.classify_task(parsed["prompt"])
@@ -329,7 +335,13 @@ class AIService:
             provider=provider, model=model, target_room=target_room, scope=scope
         )
         if request_id is None:
-            self.app.append_system_message("AI busy. Use /ai status or /ai cancel.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="AI busy: another request is active.",
+                    why="Only one active local AI request is supported at a time.",
+                    next_step="Run /ai status or /ai cancel, then submit the next request.",
+                )
+            )
             return
 
         prompt_event = self.app.build_event("ai_prompt", prompt)

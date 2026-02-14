@@ -205,7 +205,7 @@ def test_ai_busy_rejects_new_request(tmp_path):
     app.ai_active_request_id = "busy123"
     app.ai_cancel_event = Event()
     app.handle_ai_command("hello while busy")
-    assert "AI busy. Use /ai status or /ai cancel." in app.output_field.text
+    assert "Problem: AI busy: another request is active." in app.output_field.text
 
 
 def test_memory_add_creates_confirm_draft_from_last_ai_response(tmp_path):

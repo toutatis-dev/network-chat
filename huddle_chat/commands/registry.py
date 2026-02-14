@@ -34,6 +34,8 @@ class CommandRegistry:
             "/next": self.command_next,
             "/prev": self.command_prev,
             "/clearsearch": self.command_clearsearch,
+            "/help": self.command_help,
+            "/onboard": self.command_onboard,
             "/exit": self.command_exit,
             "/quit": self.command_exit,
             "/clear": self.command_clear,
@@ -162,6 +164,12 @@ class CommandRegistry:
         self.app.search_hits = []
         self.app.active_search_hit_idx = -1
         self.app.append_system_message("Search cleared.")
+
+    def command_help(self, args: str) -> None:
+        self.app.handle_help_command(args)
+
+    def command_onboard(self, args: str) -> None:
+        self.app.handle_onboard_command(args)
 
     def command_exit(self, _args: str) -> None:
         self.app.application.exit()

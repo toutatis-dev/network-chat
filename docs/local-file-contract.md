@@ -10,6 +10,7 @@ Local-only:
 - `.local_chat/rooms/ai-dm/messages.jsonl`
 - `.local_chat/memory/private.jsonl`
 - `.local_chat/memory/repo.jsonl`
+- `.local_chat/onboarding_state.json`
 - `chat_config.json`
 
 App-internal (stored under shared base path but not part of minimal shared chat wire contract):
@@ -81,6 +82,21 @@ Current app-managed keys:
 Behavior:
 - Missing file yields defaults/in-memory fallbacks.
 - Corrupt JSON is ignored with warning and defaults are used.
+
+## `.local_chat/onboarding_state.json`
+
+Shape:
+- `started_at` (string timestamp or empty)
+- `completed_at` (string timestamp or empty)
+- `steps` (object)
+  - `provider_configured` (bool)
+  - `sent_ai_prompt` (bool)
+  - `reviewed_or_decided_action` (bool)
+  - `saved_memory` (bool)
+
+Behavior:
+- Missing/corrupt file defaults to all-false step state.
+- File is updated by `/onboard status|start|reset`.
 
 ## `agents/profiles/*.json`
 

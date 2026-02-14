@@ -7,6 +7,7 @@ from prompt_toolkit.formatted_text.base import StyleAndTextTuples
 from prompt_toolkit.lexers import Lexer
 
 from huddle_chat.constants import THEMES
+from huddle_chat.help_catalog import HELP_TOPICS
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -258,6 +259,30 @@ class SlashCompleter(Completer):
             return self._yield_candidates(current, ["list", "add", "remove"])
         return []
 
+    def _complete_help_command(self, text: str) -> Iterable[Completion]:
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        topics = sorted(HELP_TOPICS.keys())
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/help"])
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, topics)
+        return []
+
+    def _complete_onboard_command(self, text: str) -> Iterable[Completion]:
+        tokens = text.split()
+        trailing_space = text.endswith(" ")
+        actions = ["status", "start", "reset"]
+        if len(tokens) == 1 and not trailing_space:
+            return self._yield_candidates(text, ["/onboard"])
+        current = "" if trailing_space else tokens[-1]
+        values = tokens if trailing_space else tokens[:-1]
+        if len(values) == 1:
+            return self._yield_candidates(current, actions)
+        return []
+
     def get_completions(
         self, document: Any, complete_event: Any
     ) -> Iterable[Completion]:
@@ -276,6 +301,14 @@ class SlashCompleter(Completer):
 
         if re.match(r"^/toolpaths(\s|$)", text):
             yield from self._complete_toolpaths_command(text)
+            return
+
+        if re.match(r"^/help(\s|$)", text):
+            yield from self._complete_help_command(text)
+            return
+
+        if re.match(r"^/onboard(\s|$)", text):
+            yield from self._complete_onboard_command(text)
             return
 
         if re.match(r"^/ai(\s|$)", text):
@@ -325,6 +358,8 @@ class SlashCompleter(Completer):
                 ("/approve", "Approve an action by id"),
                 ("/deny", "Deny an action by id"),
                 ("/toolpaths", "Manage allowed external tool paths"),
+                ("/help", "Show workflow and command help by topic"),
+                ("/onboard", "Guided setup and workflow checklist"),
                 ("/exit", "Quit the application"),
                 ("/clear", "Clear local chat history"),
             ]

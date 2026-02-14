@@ -300,6 +300,31 @@ def test_aiconfig_streaming_provider_completion_suggests_on_off(app_instance):
     assert "off" in texts
 
 
+def test_help_completion_suggests_topics(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/help a", cursor_position=7),
+            CompleteEvent(),
+        )
+    )
+    assert any(c.text == "ai" for c in completions)
+
+
+def test_onboard_completion_suggests_actions(app_instance):
+    completer = chat.SlashCompleter(app_instance)
+    completions = list(
+        completer.get_completions(
+            Document("/onboard ", cursor_position=9),
+            CompleteEvent(),
+        )
+    )
+    texts = [c.text for c in completions]
+    assert "status" in texts
+    assert "start" in texts
+    assert "reset" in texts
+
+
 def test_parse_event_line_rejects_unknown_event_type(app_instance):
     event = app_instance.parse_event_line(
         '{"v":1,"ts":"2026-01-01T00:00:00","type":"mystery","author":"a","text":"b"}'

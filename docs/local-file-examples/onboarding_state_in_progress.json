@@ -1,0 +1,10 @@
+{
+  "started_at": "2026-02-14T19:00:00",
+  "completed_at": "",
+  "steps": {
+    "provider_configured": true,
+    "sent_ai_prompt": true,
+    "reviewed_or_decided_action": false,
+    "saved_memory": false
+  }
+}

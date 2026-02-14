@@ -61,7 +61,13 @@ class CommandOpsService:
         try:
             tokens = shlex.split(args)
         except ValueError:
-            self.app.append_system_message("Invalid /aiconfig syntax. Check quotes.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="Invalid /aiconfig syntax.",
+                    why="Unbalanced quotes or malformed token boundaries were detected.",
+                    next_step="Run /help aiconfig, then retry your /aiconfig command.",
+                )
+            )
             return
         if not tokens:
             self.app.append_system_message(
@@ -174,9 +180,11 @@ class CommandOpsService:
             return
 
         self.app.append_system_message(
-            "Usage: /aiconfig [set-key <provider> <key> | set-model <provider> <model> | "
-            "set-provider <provider> | streaming <...>] "
-            "(also accepts: <provider> set-key <key>, <provider> set-model <model>)"
+            self.app.help_service.format_guided_error(
+                problem="Unsupported /aiconfig command form.",
+                why="Only documented /aiconfig subcommands are accepted.",
+                next_step="Run /help aiconfig for supported forms and examples.",
+            )
         )
 
     def parse_share_selector(self, selector: str) -> list[dict[str, Any]]:
@@ -199,7 +207,13 @@ class CommandOpsService:
 
     def handle_share_command(self, args: str) -> None:
         if not self.app.is_local_room():
-            self.app.append_system_message("Use /share only inside #ai-dm.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="/share is only available in #ai-dm.",
+                    why="Share copies selected local AI-DM messages into a shared room.",
+                    next_step="Run /join ai-dm, then retry /share <target-room> <id|start-end>.",
+                )
+            )
             return
         try:
             tokens = shlex.split(args)
@@ -264,7 +278,13 @@ class CommandOpsService:
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message("Invalid /agent syntax. Check quotes.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="Invalid /agent syntax.",
+                    why="Unbalanced quotes or malformed token boundaries were detected.",
+                    next_step="Run /help agent, then retry the command.",
+                )
+            )
             return
         if not tokens:
             self.app.append_system_message("Usage: /agent status")
@@ -385,7 +405,13 @@ class CommandOpsService:
             )
             return
 
-        self.app.append_system_message("Unknown /agent command. Use /agent help.")
+        self.app.append_system_message(
+            self.app.help_service.format_guided_error(
+                problem=f"Unknown /agent command '{action}'.",
+                why="The subcommand is not part of the current /agent command set.",
+                next_step="Run /help agent for supported subcommands and examples.",
+            )
+        )
 
     def handle_toolpaths_command(self, args: str) -> None:
         trimmed = args.strip()
@@ -401,11 +427,21 @@ class CommandOpsService:
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message("Invalid /toolpaths syntax. Check quotes.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="Invalid /toolpaths syntax.",
+                    why="Unbalanced quotes or malformed token boundaries were detected.",
+                    next_step="Run /help tools, then retry /toolpaths command.",
+                )
+            )
             return
         if not tokens:
             self.app.append_system_message(
-                "Usage: /toolpaths <list|add <path>|remove <path>>"
+                self.app.help_service.format_guided_error(
+                    problem="Missing /toolpaths subcommand.",
+                    why="The command requires list/add/remove action.",
+                    next_step="Run /help tools for valid /toolpaths usage.",
+                )
             )
             return
         action = tokens[0].lower()
@@ -426,5 +462,9 @@ class CommandOpsService:
             self.app.append_system_message(msg)
             return
         self.app.append_system_message(
-            "Usage: /toolpaths <list|add <path>|remove <path>>"
+            self.app.help_service.format_guided_error(
+                problem=f"Unknown /toolpaths subcommand '{action}'.",
+                why="Only list, add, and remove are supported.",
+                next_step="Run /help tools for examples.",
+            )
         )

@@ -2,6 +2,7 @@ from huddle_chat.services.action_service import ActionService
 from huddle_chat.services.ai_service import AIService
 from huddle_chat.services.agent_service import AgentService
 from huddle_chat.services.command_ops_service import CommandOpsService
+from huddle_chat.services.help_service import HelpService
 from huddle_chat.services.memory_service import MemoryService
 from huddle_chat.services.routing_service import RoutingService
 from huddle_chat.services.tool_executor import ToolExecutorService
@@ -15,6 +16,7 @@ __all__ = [
     "AIService",
     "AgentService",
     "CommandOpsService",
+    "HelpService",
     "MemoryService",
     "RoutingService",
     "ToolExecutorService",

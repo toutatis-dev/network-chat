@@ -13,6 +13,7 @@ Huddle Chat is a serverless, room-based terminal chat client for shared filesyst
 - Agent profile controls for memory scopes and task routing.
 - Approval-gated actions and tool execution with local audit trail.
 - Presence hardening against malformed presence files.
+- Built-in topic help and onboarding checklist (`/help`, `/onboard`).
 
 ## Quick Start
 
@@ -71,6 +72,8 @@ Launchers create/use a local venv and install runtime dependencies.
 - `/deny <action-id>` deny action.
 - `/toolpaths list|add <path>|remove <path>` manage allowed tool roots.
 - `/setpath <path>` set shared base path and restart.
+- `/help [topic]` show workflow-oriented help pages.
+- `/onboard [status|start|reset]` guided setup/checklist for first workflow.
 - `/clear` clear local viewport state.
 - `/exit` or `/quit` exit app.
 
@@ -86,6 +89,7 @@ Local/internal files:
 - `.local_chat/ai_config.json`
 - `.local_chat/memory/private.jsonl`
 - `.local_chat/memory/repo.jsonl`
+- `.local_chat/onboarding_state.json`
 - `chat_config.json`
 - `agents/profiles/*.json`
 - `agents/audit.jsonl`

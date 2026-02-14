@@ -602,7 +602,13 @@ class MemoryService:
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message("Invalid /memory syntax. Check quotes.")
+            self.app.append_system_message(
+                self.app.help_service.format_guided_error(
+                    problem="Invalid /memory syntax.",
+                    why="Unbalanced quotes or malformed token boundaries were detected.",
+                    next_step="Run /help memory and retry your /memory command.",
+                )
+            )
             return
         if not tokens:
             self.app.append_system_message("Usage: /memory help")
@@ -637,7 +643,13 @@ class MemoryService:
 
         if action == "cancel":
             if not self.app.memory_draft_active:
-                self.app.append_system_message("No active memory draft.")
+                self.app.append_system_message(
+                    self.app.help_service.format_guided_error(
+                        problem="No active memory draft.",
+                        why="There is nothing to confirm or cancel yet.",
+                        next_step="Run /memory add to draft from the latest AI response.",
+                    )
+                )
                 return
             self.clear_memory_draft()
             self.app.append_system_message("Memory draft canceled.")
@@ -647,7 +659,13 @@ class MemoryService:
             if not self.app.memory_draft_active or not isinstance(
                 self.app.memory_draft, dict
             ):
-                self.app.append_system_message("No active memory draft.")
+                self.app.append_system_message(
+                    self.app.help_service.format_guided_error(
+                        problem="No active memory draft.",
+                        why="Draft editing requires an existing draft context.",
+                        next_step="Run /memory add first, then /memory edit ...",
+                    )
+                )
                 return
             if len(tokens) < 3:
                 self.app.append_system_message(
@@ -752,4 +770,10 @@ class MemoryService:
             self.app.append_system_message("\n".join(lines))
             return
 
-        self.app.append_system_message("Unknown /memory command. Use /memory help.")
+        self.app.append_system_message(
+            self.app.help_service.format_guided_error(
+                problem=f"Unknown /memory command '{action}'.",
+                why="The subcommand is not part of the current /memory command set.",
+                next_step="Run /help memory for supported commands.",
+            )
+        )

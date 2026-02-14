@@ -3,6 +3,7 @@ import os
 CONFIG_FILE = "chat_config.json"
 LOCAL_CHAT_ROOT = ".local_chat"
 AI_CONFIG_FILE = os.path.join(LOCAL_CHAT_ROOT, "ai_config.json")
+ONBOARDING_STATE_FILE = os.path.join(LOCAL_CHAT_ROOT, "onboarding_state.json")
 LOCAL_ROOMS_ROOT = os.path.join(LOCAL_CHAT_ROOT, "rooms")
 LOCAL_MEMORY_ROOT = os.path.join(LOCAL_CHAT_ROOT, "memory")
 AI_DM_ROOM = "ai-dm"

@@ -37,6 +37,7 @@ from huddle_chat.constants import (
     AI_CONFIG_FILE,
     AI_DM_ROOM,
     AI_HTTP_TIMEOUT_SECONDS,
+    ONBOARDING_STATE_FILE,
     CLIENT_ID_LENGTH,
     COLORS,
     CONFIG_FILE,
@@ -69,6 +70,7 @@ from huddle_chat.services import (
     AIService,
     AgentService,
     CommandOpsService,
+    HelpService,
     MemoryService,
     RoutingService,
     RuntimeService,
@@ -189,6 +191,7 @@ class ChatApp:
         self.action_service = ActionService(self)
         self.tool_service = ToolService(self)
         self.command_ops_service = CommandOpsService(self)
+        self.help_service = HelpService(self)
         self.runtime_service = RuntimeService(self)
         self.ai_provider_clients: dict[str, ProviderClient] = {
             "gemini": GeminiClient(),
@@ -352,6 +355,9 @@ class ChatApp:
                 },
                 f,
             )
+
+    def get_onboarding_state_path(self) -> Path:
+        return Path(ONBOARDING_STATE_FILE)
 
     def get_style(self) -> Style:
         theme_dict = THEMES.get(self.current_theme, THEMES["default"])
@@ -1289,6 +1295,8 @@ class ChatApp:
             self.tool_service = ToolService(self)
         if not hasattr(self, "command_ops_service"):
             self.command_ops_service = CommandOpsService(self)
+        if not hasattr(self, "help_service"):
+            self.help_service = HelpService(self)
         if not hasattr(self, "runtime_service"):
             self.runtime_service = RuntimeService(self)
         if not hasattr(self, "ai_provider_clients"):
@@ -1486,6 +1494,14 @@ class ChatApp:
     def handle_toolpaths_command(self, args: str) -> None:
         self.ensure_services_initialized()
         self.command_ops_service.handle_toolpaths_command(args)
+
+    def handle_help_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.help_service.handle_help_command(args)
+
+    def handle_onboard_command(self, args: str) -> None:
+        self.ensure_services_initialized()
+        self.help_service.handle_onboard_command(args)
 
     def get_tool_paths(self) -> list[str]:
         paths: list[str] = []
@@ -1796,7 +1812,14 @@ class ChatApp:
             args = parts[1] if len(parts) > 1 else ""
             handler = self.command_handlers.get(command)
             if handler is None:
-                self.append_system_message(f"Unknown command: {command}")
+                self.ensure_services_initialized()
+                self.append_system_message(
+                    self.help_service.format_guided_error(
+                        problem=f"Unknown command '{command}'.",
+                        why="The command is not in the registered slash command list.",
+                        next_step="Run /help overview to see available workflows and commands.",
+                    )
+                )
                 self.input_field.text = ""
                 return
             handler(args)
