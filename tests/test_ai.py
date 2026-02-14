@@ -1,3 +1,5 @@
+import threading
+import time
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -463,3 +465,39 @@ def test_memory_confirm_warns_on_duplicates(tmp_path):
     app.handle_memory_command("confirm")
     assert "Potential duplicate memory entries:" in app.output_field.text
     assert "Memory saved:" in app.output_field.text
+
+
+def test_run_ai_request_with_retry_interrupts_on_cancel(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.ensure_services_initialized()
+    request_id = app.start_ai_request_state(
+        provider="gemini",
+        model="gemini-2.5-flash",
+        target_room="general",
+        scope="room",
+    )
+    assert request_id is not None
+
+    def slow_provider(**kwargs):
+        time.sleep(1.0)
+        return "late-answer"
+
+    app.call_ai_provider = slow_provider
+
+    def trigger_cancel():
+        time.sleep(0.1)
+        app.request_ai_cancel()
+
+    threading.Thread(target=trigger_cancel, daemon=True).start()
+    started = time.monotonic()
+    answer, err = app.run_ai_request_with_retry(
+        request_id=request_id,
+        provider="gemini",
+        api_key="k",
+        model="gemini-2.5-flash",
+        prompt="hello",
+    )
+    elapsed = time.monotonic() - started
+    assert answer is None
+    assert err == "AI request cancelled."
+    assert elapsed < 0.7

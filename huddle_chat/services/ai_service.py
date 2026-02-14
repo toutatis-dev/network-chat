@@ -1,7 +1,7 @@
 import shlex
 import time
 from collections.abc import Callable
-from threading import Thread
+from threading import Event as ThreadEvent, Thread
 from typing import TYPE_CHECKING, Any
 
 from huddle_chat.constants import AI_DM_ROOM, AI_RETRY_BACKOFF_SECONDS
@@ -153,12 +153,16 @@ class AIService:
         if self.app.is_ai_request_cancelled(request_id):
             return None, "AI request cancelled."
         try:
-            answer = self.app.call_ai_provider(
+            answer, call_error = self._call_provider_interruptible(
+                request_id=request_id,
                 provider=provider,
                 api_key=api_key,
                 model=model,
                 prompt=prompt,
             )
+            if call_error:
+                raise call_error
+            assert answer is not None
             return answer, None
         except Exception as exc:
             if self.app.is_ai_request_cancelled(request_id):
@@ -176,17 +180,48 @@ class AIService:
             if self.app.is_ai_request_cancelled(request_id):
                 return None, "AI request cancelled."
             try:
-                answer = self.app.call_ai_provider(
+                answer, retry_error = self._call_provider_interruptible(
+                    request_id=request_id,
                     provider=provider,
                     api_key=api_key,
                     model=model,
                     prompt=prompt,
                 )
+                if retry_error:
+                    raise retry_error
+                assert answer is not None
                 return answer, None
             except Exception as retry_exc:
                 return None, f"AI request failed after retry: {retry_exc}"
 
-    def create_thread(self, target: Callable[..., None], args: tuple[Any, ...]) -> Thread:
+    def _call_provider_interruptible(
+        self, request_id: str, provider: str, api_key: str, model: str, prompt: str
+    ) -> tuple[str | None, Exception | None]:
+        result: dict[str, Any] = {"answer": None, "error": None}
+        finished = ThreadEvent()
+
+        def worker() -> None:
+            try:
+                result["answer"] = self.app.call_ai_provider(
+                    provider=provider,
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                )
+            except Exception as exc:
+                result["error"] = exc
+            finally:
+                finished.set()
+
+        Thread(target=worker, daemon=True).start()
+        while not finished.wait(0.1):
+            if self.app.is_ai_request_cancelled(request_id):
+                return None, RuntimeError("AI request cancelled.")
+        return result.get("answer"), result.get("error")
+
+    def create_thread(
+        self, target: Callable[..., None], args: tuple[Any, ...]
+    ) -> Thread:
         try:
             import chat
 
