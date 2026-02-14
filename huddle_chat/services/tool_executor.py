@@ -78,6 +78,12 @@ class ToolExecutorService:
         output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return proc.returncode, output.strip(), duration_ms
 
+    def _venv_python(self) -> str:
+        venv_dir = Path(self.app.base_dir) / "venv"
+        if self.app.is_windows():
+            return str(venv_dir / "Scripts" / "python.exe")
+        return str(venv_dir / "bin" / "python")
+
     def execute_tool(self, request: ToolCallRequest) -> ToolCallResult:
         tool = request["toolName"]
         args = request.get("arguments", {})
@@ -163,27 +169,21 @@ class ToolExecutorService:
                 return self._text_result(request, code, output, duration)
 
             if tool == "run_lint":
-                cmd = (
-                    [
-                        ".\\venv\\Scripts\\python",
-                        "-m",
-                        "flake8",
-                        "chat.py",
-                        "huddle_chat",
-                        "tests",
-                    ]
-                    if self.app.is_windows()
-                    else ["python3", "-m", "flake8", "chat.py", "huddle_chat", "tests"]
-                )
+                venv_python = self._venv_python()
+                cmd = [
+                    venv_python,
+                    "-m",
+                    "flake8",
+                    "chat.py",
+                    "huddle_chat",
+                    "tests",
+                ]
                 code, output, duration = self._run(cmd, timeout)
                 return self._text_result(request, code, output, duration)
 
             if tool == "run_typecheck":
-                cmd = (
-                    [".\\venv\\Scripts\\python", "-m", "mypy", "chat.py", "huddle_chat"]
-                    if self.app.is_windows()
-                    else ["python3", "-m", "mypy", "chat.py", "huddle_chat"]
-                )
+                venv_python = self._venv_python()
+                cmd = [venv_python, "-m", "mypy", "chat.py", "huddle_chat"]
                 code, output, duration = self._run(cmd, timeout)
                 return self._text_result(request, code, output, duration)
 
