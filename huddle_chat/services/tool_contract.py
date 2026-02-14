@@ -32,11 +32,13 @@ def validate_arg_types(
     for key, value in args.items():
         prop = properties.get(key)
         if not isinstance(prop, dict):
-            continue
+            return False, f"Unsupported argument '{key}'."
         expected = prop.get("type")
         if expected == "string" and not isinstance(value, str):
             return False, f"Argument '{key}' must be a string."
-        if expected == "integer" and not isinstance(value, int):
+        if expected == "integer" and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
             return False, f"Argument '{key}' must be an integer."
         if expected == "boolean" and not isinstance(value, bool):
             return False, f"Argument '{key}' must be a boolean."

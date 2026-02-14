@@ -56,6 +56,9 @@ class ActionService:
         action = self.app.pending_actions.get(action_id)
         if action is None:
             return False, f"Unknown action '{action_id}'."
+        if self._is_action_expired(action):
+            self._mark_action_expired(action_id, action)
+            return False, f"Action '{action_id}' is expired."
         if action.get("status") != "pending":
             return False, f"Action '{action_id}' is already {action.get('status')}."
         if decision not in {"approved", "denied"}:
@@ -76,6 +79,12 @@ class ActionService:
         self.ensure_pending_actions_initialized()
         action = self.app.pending_actions.get(action_id)
         if action is None:
+            return
+        if self._is_action_expired(action):
+            self._mark_action_expired(action_id, action)
+            self.app.append_system_message(
+                f"Action {action_id} expired before execution."
+            )
             return
         if str(action.get("status")) != "approved":
             return
@@ -179,6 +188,8 @@ class ActionService:
                     status = str(row.get("status", "")).strip()
                     if status == "pending":
                         self.app.pending_actions[action_id] = row
+                        if self._is_action_expired(row):
+                            self._mark_action_expired(action_id, row)
                         continue
                     if status in {"approved", "running", "completed", "failed"}:
                         if action_id in self.app.pending_actions:
@@ -196,3 +207,27 @@ class ActionService:
                         self.app.pending_actions[action_id]["status"] = decision
         except OSError:
             return
+
+    def _is_action_expired(self, action: dict[str, Any]) -> bool:
+        expires_at = str(action.get("expires_at", "")).strip()
+        if not expires_at:
+            return False
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+        except ValueError:
+            return True
+        return datetime.now() >= expiry
+
+    def _mark_action_expired(self, action_id: str, action: dict[str, Any]) -> None:
+        if str(action.get("status", "")).strip() == "expired":
+            return
+        action["status"] = "expired"
+        self.app.append_jsonl_row(
+            self.app.get_actions_audit_file(),
+            {
+                "action_id": action_id,
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "status": "expired",
+                "user": self.app.name,
+            },
+        )

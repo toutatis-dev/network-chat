@@ -23,7 +23,6 @@ class ToolRegistryService:
                     "properties": {
                         "query": {"type": "string"},
                         "path": {"type": "string"},
-                        "glob": {"type": "string"},
                         "maxResults": {"type": "integer"},
                     },
                     "required": ["query"],
@@ -42,7 +41,6 @@ class ToolRegistryService:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "glob": {"type": "string"},
                         "maxResults": {"type": "integer"},
                     },
                     "required": [],
@@ -79,8 +77,6 @@ class ToolRegistryService:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "target": {"type": "string"},
-                        "value": {"type": "string"},
                         "maxDurationSec": {"type": "integer"},
                     },
                     "required": [],
@@ -98,7 +94,6 @@ class ToolRegistryService:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "scope": {"type": "string"},
                         "maxDurationSec": {"type": "integer"},
                     },
                     "required": [],
@@ -116,7 +111,6 @@ class ToolRegistryService:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "scope": {"type": "string"},
                         "maxDurationSec": {"type": "integer"},
                     },
                     "required": [],
@@ -133,7 +127,7 @@ class ToolRegistryService:
                 "description": "Show git working tree state.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"short": {"type": "boolean"}},
+                    "properties": {},
                     "required": [],
                 },
                 "annotations": {
@@ -150,7 +144,6 @@ class ToolRegistryService:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "staged": {"type": "boolean"},
                         "maxLines": {"type": "integer"},
                     },
                     "required": [],

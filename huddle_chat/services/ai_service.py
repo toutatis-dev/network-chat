@@ -149,6 +149,8 @@ class AIService:
         self, request_id: str, provider: str, api_key: str, model: str, prompt: str
     ) -> tuple[str | None, str | None]:
         self.app.ensure_ai_state_initialized()
+        if self.app.is_ai_request_cancelled(request_id):
+            return None, "AI request cancelled."
         try:
             answer = self.app.call_ai_provider(
                 provider=provider,
@@ -363,7 +365,7 @@ class AIService:
 
         action_warning: str | None = None
         action_ids: list[str] = []
-        if action_mode:
+        if action_mode and not self.app.is_ai_request_cancelled(request_id):
             tools_json = self.app.tool_service.build_tools_prompt_block()
             action_prompt = (
                 "Return strict JSON only with keys: answer, proposed_actions. "

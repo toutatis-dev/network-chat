@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import chat
+from huddle_chat.services.tool_contract import validate_tool_call_args
 
 
 class FakeLockException(Exception):
@@ -146,3 +147,48 @@ def test_load_memory_entries_skips_invalid_rows(tmp_path):
     entries = app.load_memory_entries()
     assert len(entries) == 1
     assert entries[0]["id"] == "mem_1"
+
+
+def test_validate_tool_call_args_rejects_unknown_fields():
+    definition = {
+        "name": "read_file",
+        "title": "Read File",
+        "description": "Read a bounded line range from a file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "startLine": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+        "annotations": {},
+    }
+    ok, err = validate_tool_call_args(
+        definition,
+        {"path": "chat.py", "startLine": 1, "unknownField": "nope"},
+    )
+    assert ok is False
+    assert err == "Unsupported argument 'unknownField'."
+
+
+def test_validate_tool_call_args_rejects_bool_for_integer():
+    definition = {
+        "name": "read_file",
+        "title": "Read File",
+        "description": "Read a bounded line range from a file.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "startLine": {"type": "integer"},
+            },
+            "required": ["path"],
+        },
+        "annotations": {},
+    }
+    ok, err = validate_tool_call_args(
+        definition, {"path": "chat.py", "startLine": True}
+    )
+    assert ok is False
+    assert err == "Argument 'startLine' must be an integer."

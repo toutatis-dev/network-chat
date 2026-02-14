@@ -475,9 +475,14 @@ class ChatApp:
             logger.warning("Failed ensuring agent paths: %s", exc)
 
     def append_jsonl_row(self, path: Path, row: dict[str, Any]) -> bool:
+        if not hasattr(self, "_jsonl_append_lock"):
+            self._jsonl_append_lock = Lock()
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+            with self._jsonl_append_lock:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(row, ensure_ascii=True) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
             return True
         except OSError:
             return False
@@ -1583,8 +1588,9 @@ class ChatApp:
         prompt: str,
         target_room: str,
         is_private: bool,
-        memory_ids_used: list[str],
-        memory_topics_used: list[str],
+        disable_memory: bool,
+        action_mode: bool,
+        memory_scopes: list[str],
     ) -> None:
         self.ensure_services_initialized()
         self.ai_service.process_ai_response(
@@ -1595,8 +1601,9 @@ class ChatApp:
             prompt,
             target_room,
             is_private,
-            memory_ids_used,
-            memory_topics_used,
+            disable_memory,
+            action_mode,
+            memory_scopes,
         )
 
     def build_command_handlers(self) -> dict[str, Any]:

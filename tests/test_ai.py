@@ -247,6 +247,34 @@ def test_memory_reject_enters_edit_mode_and_edit_updates_field(tmp_path):
     assert app.memory_draft["summary"] == "updated summary"
 
 
+def test_process_ai_response_wrapper_forwards_updated_signature(tmp_path):
+    app = build_ai_app(tmp_path)
+    app.ensure_services_initialized()
+    captured: dict[str, object] = {}
+
+    def fake_process_ai_response(*args):
+        captured["args"] = args
+
+    app.ai_service.process_ai_response = fake_process_ai_response
+    app.process_ai_response(
+        "req123",
+        "gemini",
+        "key",
+        "gemini-2.5-flash",
+        "hello",
+        "general",
+        False,
+        True,
+        True,
+        ["team"],
+    )
+    forwarded = captured["args"]
+    assert isinstance(forwarded, tuple)
+    assert forwarded[7] is True  # disable_memory
+    assert forwarded[8] is True  # action_mode
+    assert forwarded[9] == ["team"]
+
+
 def test_ai_uses_memory_and_persists_citations(tmp_path):
     app = build_ai_app(tmp_path)
     written: list[tuple[str | None, dict]] = []
