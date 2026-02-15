@@ -27,7 +27,10 @@ class ToolService:
         tools = self.list_tools()
         if not tools:
             return "No tools available."
-        return json.dumps(tools, ensure_ascii=True)
+        # Serialize list of Pydantic models
+        return json.dumps(
+            [t.model_dump(exclude_none=True) for t in tools], ensure_ascii=True
+        )
 
     def parse_ai_action_response(
         self, text: str
@@ -62,12 +65,8 @@ class ToolService:
 
     def is_tool_allowed(self, tool_name: str) -> bool:
         profile = self.app.get_active_agent_profile()
-        policy = profile.get("tool_policy", {})
-        if not isinstance(policy, dict):
-            return False
-        allowed = policy.get("allowed_tools", [])
-        if not isinstance(allowed, list):
-            return False
+        policy = profile.tool_policy
+        allowed = policy.allowed_tools
         return tool_name in {str(v).strip() for v in allowed}
 
     def validate_tool_action(
@@ -108,16 +107,16 @@ class ToolService:
         return True, action_id
 
     def execute_action(self, action: dict[str, Any]) -> ToolCallResult:
-        request: ToolCallRequest = {
-            "toolName": str(action.get("tool", "")),
-            "arguments": (
+        request = ToolCallRequest(
+            toolName=str(action.get("tool", "")),
+            arguments=(
                 action.get("inputs", {})
                 if isinstance(action.get("inputs"), dict)
                 else {}
             ),
-            "requestId": str(action.get("request_id", "")),
-            "actionId": str(action.get("action_id", "")),
-            "room": str(action.get("room", self.app.current_room)),
-            "user": self.app.name,
-        }
+            requestId=str(action.get("request_id", "")),
+            actionId=str(action.get("action_id", "")),
+            room=str(action.get("room", self.app.current_room)),
+            user=self.app.name,
+        )
         return self.executor.execute_tool(request)

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
-from huddle_chat.models import PlaybookDefinition
+from huddle_chat.models import PlaybookDefinition, PlaybookStep
 from huddle_chat.playbook_catalog import PLAYBOOKS
 
 if TYPE_CHECKING:
@@ -21,34 +21,34 @@ class PlaybookService:
         rows: list[tuple[str, str]] = []
         for key in sorted(PLAYBOOKS.keys()):
             row = PLAYBOOKS[key]
-            rows.append((row["name"], row["summary"]))
+            rows.append((row.name, row.summary))
         return rows
 
     def get_playbook(self, name: str) -> PlaybookDefinition | None:
         return PLAYBOOKS.get(name.strip().lower())
 
     def render_playbook(self, playbook: PlaybookDefinition) -> str:
-        lines = [f"Playbook: {playbook['name']}", playbook["summary"], "", "Steps:"]
-        for idx, step in enumerate(playbook["steps"], start=1):
+        lines = [f"Playbook: {playbook.name}", playbook.summary, "", "Steps:"]
+        for idx, step in enumerate(playbook.steps, start=1):
             placeholder_text = ""
-            if step["placeholders"]:
-                placeholder_text = f" placeholders={','.join(step['placeholders'])}"
+            if step.placeholders:
+                placeholder_text = f" placeholders={','.join(step.placeholders)}"
             lines.append(
-                f"{idx}. [{step['kind']}] {step['title']}{placeholder_text}\n"
-                f"   cmd: {step['command_template']}\n"
-                f"   expect: {step['expected_result']}"
+                f"{idx}. [{step.kind}] {step.title}{placeholder_text}\n"
+                f"   cmd: {step.command_template}\n"
+                f"   expect: {step.expected_result}"
             )
         return "\n".join(lines)
 
-    def _is_confirm_required(self, step: dict[str, Any]) -> bool:
-        return str(step.get("kind", "")).strip().lower() in {"mutating", "approval"}
+    def _is_confirm_required(self, step: PlaybookStep) -> bool:
+        return str(step.kind or "").strip().lower() in {"mutating", "approval"}
 
     def _start_run_state(self, playbook: PlaybookDefinition) -> None:
         self.ensure_playbook_state_initialized()
         self.app.playbook_run_state = {
-            "name": playbook["name"],
+            "name": playbook.name,
             "step_index": 0,
-            "steps": playbook["steps"],
+            "steps": playbook.steps,
             "awaiting_confirmation": False,
         }
 
@@ -56,8 +56,8 @@ class PlaybookService:
         self.ensure_playbook_state_initialized()
         self.app.playbook_run_state = None
 
-    def _step_status_header(self, step: dict[str, Any], idx: int, total: int) -> str:
-        return f"Playbook step {idx}/{total}: {step.get('title', 'step')}"
+    def _step_status_header(self, step: PlaybookStep, idx: int, total: int) -> str:
+        return f"Playbook step {idx}/{total}: {step.title or 'step'}"
 
     def _advance_run(self) -> None:
         self.ensure_playbook_state_initialized()
@@ -78,28 +78,28 @@ class PlaybookService:
                 self._clear_run_state()
                 return
 
-            step_any = steps[idx]
-            if not isinstance(step_any, dict):
+            step = steps[idx]
+            if not isinstance(step, PlaybookStep):
+                # Should not happen if initialized correctly, but handle gracefully
                 state["step_index"] = idx + 1
                 continue
-            step = cast(dict[str, Any], step_any)
 
             self.app.append_system_message(
                 self._step_status_header(step, idx + 1, total)
             )
 
-            if bool(step.get("requires_input", False)):
-                command_template = str(step.get("command_template", "")).strip()
+            if step.requires_input:
+                command_template = str(step.command_template or "").strip()
                 self.app.append_system_message(
                     f"Manual input required: {command_template}"
                 )
                 self.app.append_system_message(
-                    f"Expected result: {step.get('expected_result', '')}"
+                    f"Expected result: {step.expected_result or ''}"
                 )
                 self._clear_run_state()
                 return
 
-            command = str(step.get("command_template", "")).strip()
+            command = str(step.command_template or "").strip()
             if not command:
                 state["step_index"] = idx + 1
                 continue
@@ -107,7 +107,7 @@ class PlaybookService:
             if self._is_confirm_required(step):
                 state["awaiting_confirmation"] = True
                 state["pending_command"] = command
-                state["pending_title"] = str(step.get("title", "step"))
+                state["pending_title"] = str(step.title or "step")
                 self.app.append_system_message(
                     "Confirmation required for mutating step. Continue? (y/n)"
                 )
@@ -196,7 +196,7 @@ class PlaybookService:
                 return
             self._start_run_state(playbook)
             self.app.append_system_message(
-                f"Playbook '{playbook['name']}' started (semi-automated mode)."
+                f"Playbook '{playbook.name}' started (semi-automated mode)."
             )
             self._advance_run()
             return

@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import random
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +14,8 @@ from huddle_chat.constants import (
     LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
 )
+from huddle_chat.models import ChatEvent
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -26,7 +27,7 @@ class StorageService:
     def __init__(self, app: "ChatApp"):
         self.app = app
 
-    def parse_event_line(self, line: str) -> dict[str, Any] | None:
+    def parse_event_line(self, line: str) -> ChatEvent | None:
         line = line.strip()
         if not line:
             return None
@@ -42,13 +43,8 @@ class StorageService:
         if event_type not in EVENT_ALLOWED_TYPES:
             logger.warning("Invalid event type '%s' ignored.", event_type)
             return None
-        author = data.get("author")
-        text = data.get("text")
-        if not isinstance(author, str) or not isinstance(text, str):
-            logger.warning(
-                "Invalid event payload ignored (author/text must be string)."
-            )
-            return None
+
+        # Schema version check
         if "v" in data:
             version = data.get("v")
             if not isinstance(version, int):
@@ -57,16 +53,12 @@ class StorageService:
             if version > EVENT_SCHEMA_VERSION:
                 logger.warning("Future event schema version %s ignored.", version)
                 return None
-        else:
-            data["v"] = EVENT_SCHEMA_VERSION
-        if "ts" not in data:
-            data["ts"] = datetime.now().isoformat(timespec="seconds")
-        if not isinstance(data.get("ts"), str):
-            data["ts"] = str(data.get("ts"))
-        data["type"] = event_type
-        data["author"] = author
-        data["text"] = text
-        return data
+
+        try:
+            return ChatEvent.from_dict(data)
+        except ValidationError as e:
+            logger.warning("Invalid event schema: %s", e)
+            return None
 
     def read_recent_lines(self, path: Path, max_lines: int) -> list[str]:
         if max_lines <= 0:
@@ -98,7 +90,7 @@ class StorageService:
             self.app.last_pos_by_room[self.app.current_room] = 0
             return
 
-        loaded_events: list[dict[str, Any]] = []
+        loaded_events: list[ChatEvent] = []
         try:
             for line in self.read_recent_lines(message_file, MAX_MESSAGES * 2):
                 event = self.parse_event_line(line)
@@ -119,7 +111,7 @@ class StorageService:
         self.app.rebuild_search_hits()
 
     def write_to_file(
-        self, payload: dict[str, Any] | str, room: str | None = None
+        self, payload: dict[str, Any] | str | ChatEvent, room: str | None = None
     ) -> bool:
         self.app.ensure_locking_dependency()
         import chat
@@ -137,7 +129,9 @@ class StorageService:
                     fail_when_locked=True,
                     encoding="utf-8",
                 ) as f:
-                    if isinstance(payload, dict):
+                    if isinstance(payload, ChatEvent):
+                        row = json.dumps(payload.to_dict(), ensure_ascii=True)
+                    elif isinstance(payload, dict):
                         row = json.dumps(payload, ensure_ascii=True)
                     else:
                         row = payload.rstrip("\n")

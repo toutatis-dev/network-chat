@@ -2,17 +2,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from huddle_chat.services.tool_executor import ToolExecutorService
+from huddle_chat.models import ToolCallRequest
 
 
-def _request(tool_name: str) -> dict:
-    return {
-        "toolName": tool_name,
-        "arguments": {},
-        "requestId": "req-1",
-        "actionId": "act-1",
-        "room": "general",
-        "user": "tester",
-    }
+def _request(tool_name: str) -> ToolCallRequest:
+    return ToolCallRequest(
+        toolName=tool_name,
+        arguments={},
+        requestId="req-1",
+        actionId="act-1",
+        room="general",
+        user="tester",
+    )
 
 
 def test_run_lint_and_typecheck_use_repo_venv_python(tmp_path: Path):

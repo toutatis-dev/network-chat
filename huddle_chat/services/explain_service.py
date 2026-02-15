@@ -56,41 +56,37 @@ class ExplainService:
 
     def explain_agent(self) -> str:
         profile = self.app.get_active_agent_profile()
-        profile_id = str(profile.get("id", "default"))
-        name = str(profile.get("name", ""))
-        version = profile.get("version", 1)
+        profile_id = str(profile.id or "default")
+        name = str(profile.name or "")
+        version = profile.version or 1
 
         memory_scopes = "team"
-        memory_policy = profile.get("memory_policy", {})
-        if isinstance(memory_policy, dict):
-            scopes = memory_policy.get("scopes", [])
-            if isinstance(scopes, list) and scopes:
-                memory_scopes = ",".join(str(item) for item in scopes)
+        memory_policy = profile.memory_policy
+        # Pydantic model MemoryPolicy
+        scopes = memory_policy.scopes
+        if isinstance(scopes, list) and scopes:
+            memory_scopes = ",".join(str(item) for item in scopes)
 
         route_count = 0
         route_preview: list[str] = []
-        routing_policy = profile.get("routing_policy", {})
-        if isinstance(routing_policy, dict):
-            routes = routing_policy.get("routes", {})
-            if isinstance(routes, dict):
-                route_count = len(routes)
-                for key in ("chat_general", "code_analysis", "memory_rerank"):
-                    value = routes.get(key)
-                    if isinstance(value, dict):
-                        route_preview.append(
-                            f"{key}->{value.get('provider', '?')}:{value.get('model', '?')}"
-                        )
+        routing_policy = profile.routing_policy
+        routes = routing_policy.routes
+        if routes:
+            route_count = len(routes)
+            for key in ("chat_general", "code_analysis", "memory_rerank"):
+                value = routes.get(key)
+                if value:
+                    route_preview.append(
+                        f"{key}->{value.get('provider', '?')}:{value.get('model', '?')}"
+                    )
 
-        tool_policy = profile.get("tool_policy", {})
-        mode = "unknown"
-        require_approval = "?"
+        tool_policy = profile.tool_policy
+        mode = str(tool_policy.mode or "unknown")
+        require_approval = str(tool_policy.require_approval)
         allowed_count = 0
-        if isinstance(tool_policy, dict):
-            mode = str(tool_policy.get("mode", "unknown"))
-            require_approval = str(tool_policy.get("require_approval", "?"))
-            allowed_tools = tool_policy.get("allowed_tools", [])
-            if isinstance(allowed_tools, list):
-                allowed_count = len(allowed_tools)
+        allowed_tools = tool_policy.allowed_tools
+        if isinstance(allowed_tools, list):
+            allowed_count = len(allowed_tools)
 
         lines = [
             f"Agent profile={profile_id} name={name} version={version}",
@@ -106,9 +102,9 @@ class ExplainService:
         if definition is None:
             return f"Unknown tool '{tool_name}'. Use /help tools for tool workflow guidance."
 
-        title = str(definition.get("title", tool_name))
-        description = str(definition.get("description", ""))
-        schema = definition.get("inputSchema", {})
+        title = str(definition.title or tool_name)
+        description = str(definition.description or "")
+        schema = definition.inputSchema or {}
         required: list[str] = []
         properties: list[str] = []
         if isinstance(schema, dict):
@@ -119,7 +115,7 @@ class ExplainService:
             if isinstance(props, dict):
                 properties = sorted(str(k) for k in props.keys())
 
-        annotations = definition.get("annotations", {})
+        annotations = definition.annotations or {}
         risk = "med"
         read_only = "?"
         requires_approval = "?"

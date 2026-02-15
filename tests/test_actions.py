@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from huddle_chat.services.action_service import ActionService
+from huddle_chat.models import ToolCallResult
 
 
 def test_approve_executes_action_and_updates_status():
@@ -20,17 +21,17 @@ def test_approve_executes_action_and_updates_status():
             "room": "general",
         }
     }
-    app.get_active_agent_profile = lambda: {"id": "default"}
+    app.get_active_agent_profile = lambda: SimpleNamespace(id="default")
     app.append_jsonl_row = lambda path, row: True
     app.get_actions_audit_file = lambda: "actions.jsonl"
     messages: list[str] = []
     app.append_system_message = lambda text: messages.append(text)
     app.tool_service = SimpleNamespace(
-        execute_action=lambda action: {
-            "content": [{"type": "text", "text": "ok"}],
-            "isError": False,
-            "meta": {"exitCode": 0, "durationMs": 12},
-        }
+        execute_action=lambda action: ToolCallResult(
+            content=[{"type": "text", "text": "ok"}],
+            isError=False,
+            meta={"exitCode": 0, "durationMs": 12},
+        )
     )
 
     service = ActionService(app)
@@ -65,16 +66,16 @@ def test_expired_action_cannot_be_approved():
             ),
         }
     }
-    app.get_active_agent_profile = lambda: {"id": "default"}
+    app.get_active_agent_profile = lambda: SimpleNamespace(id="default")
     app.append_jsonl_row = lambda path, row: True
     app.get_actions_audit_file = lambda: "actions.jsonl"
     app.append_system_message = lambda text: None
     app.tool_service = SimpleNamespace(
-        execute_action=lambda action: {
-            "content": [{"type": "text", "text": "ok"}],
-            "isError": False,
-            "meta": {"exitCode": 0, "durationMs": 12},
-        }
+        execute_action=lambda action: ToolCallResult(
+            content=[{"type": "text", "text": "ok"}],
+            isError=False,
+            meta={"exitCode": 0, "durationMs": 12},
+        )
     )
 
     service = ActionService(app)

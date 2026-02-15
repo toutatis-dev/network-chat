@@ -52,7 +52,7 @@ def validate_tool_call_args(
 ) -> tuple[bool, str | None]:
     if not isinstance(arguments, dict):
         return False, "Tool arguments must be a JSON object."
-    schema = definition.get("inputSchema", {})
+    schema = definition.inputSchema or {}
     if not isinstance(schema, dict):
         return False, "Invalid tool schema."
     ok, err = validate_required_args(schema, arguments)

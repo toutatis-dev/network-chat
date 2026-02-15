@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import chat
+from huddle_chat.models import ChatEvent
 
 
 def build_ai_app(tmp_path: Path) -> chat.ChatApp:
@@ -70,26 +71,26 @@ def test_parse_ai_args_accepts_flags():
         "--provider openai --model gpt-5-mini --private summarize this"
     )
     assert error is None
-    assert parsed["provider_override"] == "openai"
-    assert parsed["model_override"] == "gpt-5-mini"
-    assert parsed["is_private"] is True
-    assert parsed["prompt"] == "summarize this"
+    assert parsed.provider_override == "openai"
+    assert parsed.model_override == "gpt-5-mini"
+    assert parsed.is_private is True
+    assert parsed.prompt == "summarize this"
 
 
 def test_parse_ai_args_accepts_no_memory_flag():
     app = chat.ChatApp.__new__(chat.ChatApp)
     parsed, error = app.parse_ai_args("--no-memory summarize this")
     assert error is None
-    assert parsed["disable_memory"] is True
-    assert parsed["prompt"] == "summarize this"
+    assert parsed.disable_memory is True
+    assert parsed.prompt == "summarize this"
 
 
 def test_parse_ai_args_accepts_act_flag():
     app = chat.ChatApp.__new__(chat.ChatApp)
     parsed, error = app.parse_ai_args("--act summarize this")
     assert error is None
-    assert parsed["action_mode"] is True
-    assert parsed["prompt"] == "summarize this"
+    assert parsed.action_mode is True
+    assert parsed.prompt == "summarize this"
 
 
 def test_aiconfig_set_key_updates_local_config(tmp_path):
@@ -133,7 +134,9 @@ def test_ai_private_targets_local_dm_room(tmp_path):
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 
@@ -167,20 +170,20 @@ def test_ai_dm_renders_share_indexes(tmp_path):
     app = build_ai_app(tmp_path)
     app.current_room = "ai-dm"
     app.message_events = [
-        {
-            "ts": "2026-01-01T10:00:00",
-            "type": "ai_prompt",
-            "author": "Tester",
-            "text": "Q",
-        },
-        {
-            "ts": "2026-01-01T10:00:01",
-            "type": "ai_response",
-            "author": "Tester",
-            "text": "A",
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-        },
+        ChatEvent(
+            ts="2026-01-01T10:00:00",
+            type="ai_prompt",
+            author="Tester",
+            text="Q",
+        ),
+        ChatEvent(
+            ts="2026-01-01T10:00:01",
+            type="ai_response",
+            author="Tester",
+            text="A",
+            provider="gemini",
+            model="gemini-2.5-flash",
+        ),
     ]
     app.refresh_output_from_events()
     lines = app.output_field.text.splitlines()
@@ -211,13 +214,13 @@ def test_ai_busy_rejects_new_request(tmp_path):
 def test_memory_add_creates_confirm_draft_from_last_ai_response(tmp_path):
     app = build_ai_app(tmp_path)
     app.message_events = [
-        {
-            "ts": "2026-01-01T10:00:00",
-            "type": "ai_response",
-            "author": "Tester",
-            "text": "Use runbook A for deploys and rollback with command B.",
-            "request_id": "req123",
-        }
+        ChatEvent(
+            ts="2026-01-01T10:00:00",
+            type="ai_response",
+            author="Tester",
+            text="Use runbook A for deploys and rollback with command B.",
+            request_id="req123",
+        )
     ]
     app.call_ai_provider = lambda **kwargs: (
         '{"summary":"Use runbook A for deploys.","topic":"deploy","confidence":"high","tags":["runbook"]}'
@@ -244,7 +247,7 @@ def test_memory_confirm_writes_entry_and_clears_draft(tmp_path):
     }
     written = {"count": 0}
 
-    def fake_write_memory_entry(entry):
+    def fake_write_memory_entry(entry, scope="team"):
         written["count"] += 1
         return True
 
@@ -307,7 +310,9 @@ def test_ai_uses_memory_and_persists_citations(tmp_path):
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 
@@ -344,7 +349,7 @@ def test_ai_uses_memory_and_persists_citations(tmp_path):
     assert any("Shared memory context" in prompt for prompt in prompts)
     assert len(written) == 3
     assert written[0][1]["type"] == "ai_prompt"
-    assert "memory_ids_used" not in written[0][1]
+    assert not written[0][1].get("memory_ids_used")
     assert written[1][1]["type"] == "ai_response"
     assert written[1][1]["memory_ids_used"] == ["mem_1"]
     assert written[2][1]["type"] == "system"
@@ -356,7 +361,9 @@ def test_ai_no_memory_flag_bypasses_memory_retrieval(tmp_path):
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 
@@ -389,7 +396,7 @@ def test_ai_no_memory_flag_bypasses_memory_retrieval(tmp_path):
 
     assert len(prompts) == 1
     assert prompts[0] == "plain prompt"
-    assert "memory_ids_used" not in written[0][1]
+    assert not written[0][1].get("memory_ids_used")
     assert len(written) == 2
 
 
@@ -398,7 +405,9 @@ def test_ai_rerank_failure_falls_back_to_lexical(tmp_path):
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 
@@ -439,13 +448,13 @@ def test_ai_rerank_failure_falls_back_to_lexical(tmp_path):
 def test_memory_add_warns_on_duplicates(tmp_path):
     app = build_ai_app(tmp_path)
     app.message_events = [
-        {
-            "ts": "2026-01-01T10:00:00",
-            "type": "ai_response",
-            "author": "Tester",
-            "text": "Use runbook A for deploy rollback.",
-            "request_id": "req123",
-        }
+        ChatEvent(
+            ts="2026-01-01T10:00:00",
+            type="ai_response",
+            author="Tester",
+            text="Use runbook A for deploy rollback.",
+            request_id="req123",
+        )
     ]
     app.call_ai_provider = lambda **kwargs: (
         '{"summary":"Use runbook A for deploy rollback.","topic":"deploy","confidence":"high","tags":["runbook"]}'
@@ -486,7 +495,7 @@ def test_memory_confirm_warns_on_duplicates(tmp_path):
             "source": "room:general ts:0",
         }
     ]
-    app.write_memory_entry = lambda entry: True
+    app.write_memory_entry = lambda entry, scope="team": True
     app.handle_memory_command("confirm")
     assert "Potential duplicate memory entries:" in app.output_field.text
     assert "Memory saved:" in app.output_field.text
@@ -534,7 +543,9 @@ def test_ai_streaming_uses_stream_provider_and_persists_final_response_only(tmp_
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 
@@ -570,7 +581,9 @@ def test_ai_streaming_cancel_does_not_persist_partial_response(tmp_path):
     written: list[tuple[str | None, dict]] = []
 
     def fake_write(payload, room=None):
-        if isinstance(payload, dict):
+        if hasattr(payload, "to_dict"):
+            written.append((room, payload.to_dict()))
+        elif isinstance(payload, dict):
             written.append((room, payload))
         return True
 

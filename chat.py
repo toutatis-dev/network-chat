@@ -80,7 +80,7 @@ from huddle_chat.services import (
     StorageService,
     ToolService,
 )
-from huddle_chat.models import AgentProfile, ResolvedRoute
+from huddle_chat.models import AgentProfile, ResolvedRoute, ChatEvent, ParsedAIArgs
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
 portalocker: Any
@@ -155,7 +155,7 @@ class ChatApp:
         self.presence_file_id = self.client_id
 
         self.messages: list[str] = []
-        self.message_events: list[dict[str, Any]] = []
+        self.message_events: list[ChatEvent] = []
         self.online_users: dict[str, dict[str, Any]] = {}
         self.last_pos_by_room: dict[str, int] = {}
         self.search_query = ""
@@ -597,7 +597,7 @@ class ChatApp:
         except OSError as exc:
             logger.warning("Failed saving AI config: %s", exc)
 
-    def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
+    def parse_ai_args(self, arg_text: str) -> tuple[ParsedAIArgs, str | None]:
         self.ensure_services_initialized()
         return self.ai_service.parse_ai_args(arg_text)
 
@@ -1105,22 +1105,22 @@ class ChatApp:
             candidates.append({"name": raw_name, "status": status})
         return candidates
 
-    def build_event(self, event_type: str, text: str) -> dict[str, Any]:
-        return {
-            "v": EVENT_SCHEMA_VERSION,
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "type": event_type,
-            "author": self.name,
-            "text": text,
-        }
+    def build_event(self, event_type: str, text: str) -> ChatEvent:
+        return ChatEvent(
+            v=EVENT_SCHEMA_VERSION,
+            ts=datetime.now().isoformat(timespec="seconds"),
+            type=event_type,
+            author=self.name,
+            text=text,
+        )
 
-    def render_event(self, event: dict[str, Any]) -> str:
-        ts_raw = str(event.get("ts", ""))
+    def render_event(self, event: ChatEvent) -> str:
+        ts_raw = str(event.ts)
         ts = ts_raw[-8:] if len(ts_raw) >= 8 else ts_raw
-        event_type = str(event.get("type", "chat"))
-        author = self.sanitize_sidebar_text(event.get("author", "Unknown"), 64)
+        event_type = str(event.type or "chat")
+        author = self.sanitize_sidebar_text(event.author or "Unknown", 64)
         text = self.sanitize_sidebar_text(
-            event.get("text", ""), EVENT_DISPLAY_TEXT_MAX_CHARS
+            event.text or "", EVENT_DISPLAY_TEXT_MAX_CHARS
         )
 
         if event_type == "me":
@@ -1130,8 +1130,8 @@ class ChatApp:
         if event_type == "ai_prompt":
             return f"[{ts}] {author} -> AI: {text}"
         if event_type == "ai_response":
-            provider = self.sanitize_sidebar_text(event.get("provider", "ai"), 24)
-            model = self.sanitize_sidebar_text(event.get("model", ""), 40)
+            provider = self.sanitize_sidebar_text(event.provider or "ai", 24)
+            model = self.sanitize_sidebar_text(event.model or "", 40)
             model_suffix = f":{model}" if model else ""
             return f"[{ts}] AI[{provider}{model_suffix}]: {text}"
         return f"[{ts}] {author}: {text}"
@@ -1187,11 +1187,11 @@ class ChatApp:
         self.ensure_services_initialized()
         return self.storage_service.read_recent_lines(path, max_lines)
 
-    def parse_event_line(self, line: str) -> dict[str, Any] | None:
+    def parse_event_line(self, line: str) -> ChatEvent | None:
         self.ensure_services_initialized()
         return self.storage_service.parse_event_line(line)
 
-    def append_local_event(self, event: dict[str, Any]) -> None:
+    def append_local_event(self, event: ChatEvent) -> None:
         self.message_events.append(event)
         if len(self.message_events) > MAX_MESSAGES:
             self.message_events.pop(0)
@@ -1235,7 +1235,7 @@ class ChatApp:
         self.application.invalidate()
         return True
 
-    def render_event_for_display(self, event: dict[str, Any], index: int) -> str:
+    def render_event_for_display(self, event: ChatEvent, index: int) -> str:
         rendered = self.render_event(event)
         if self.is_local_room():
             return f"({index}) {rendered}"
@@ -1429,7 +1429,7 @@ class ChatApp:
         self.ensure_services_initialized()
         self.command_ops_service.handle_aiconfig_command(args)
 
-    def parse_share_selector(self, selector: str) -> list[dict[str, Any]]:
+    def parse_share_selector(self, selector: str) -> list[ChatEvent]:
         self.ensure_services_initialized()
         return self.command_ops_service.parse_share_selector(selector)
 
@@ -1641,7 +1641,7 @@ class ChatApp:
         self.ensure_services_initialized()
         return self.memory_service.write_memory_entry(entry, scope=scope)
 
-    def get_last_ai_response_event(self) -> dict[str, Any] | None:
+    def get_last_ai_response_event(self) -> ChatEvent | None:
         self.ensure_services_initialized()
         return self.memory_service.get_last_ai_response_event()
 
@@ -1649,7 +1649,7 @@ class ChatApp:
         self.ensure_services_initialized()
         return self.memory_service.extract_json_object(text)
 
-    def build_memory_source(self, event: dict[str, Any]) -> str:
+    def build_memory_source(self, event: ChatEvent) -> str:
         self.ensure_services_initialized()
         return self.memory_service.build_memory_source(event)
 
@@ -1865,7 +1865,7 @@ class ChatApp:
             )
 
     def write_to_file(
-        self, payload: dict[str, Any] | str, room: str | None = None
+        self, payload: dict[str, Any] | str | ChatEvent, room: str | None = None
     ) -> bool:
         self.ensure_services_initialized()
         return self.storage_service.write_to_file(payload, room)

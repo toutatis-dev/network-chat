@@ -7,6 +7,7 @@ from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 
 import chat
+from huddle_chat.models import ChatEvent
 
 
 @pytest.fixture
@@ -45,9 +46,9 @@ def test_handle_normal_message(app_instance):
 
     assert app_instance.write_to_file.called
     payload = app_instance.write_to_file.call_args.args[0]
-    assert payload["type"] == "chat"
-    assert payload["author"] == "TestUser"
-    assert payload["text"] == "Hello World"
+    assert payload.type == "chat"
+    assert payload.author == "TestUser"
+    assert payload.text == "Hello World"
 
 
 def test_handle_empty_input(app_instance):
@@ -60,8 +61,8 @@ def test_command_me(app_instance):
     app_instance.write_to_file = MagicMock(return_value=True)
     app_instance.handle_input("/me dances")
     payload = app_instance.write_to_file.call_args.args[0]
-    assert payload["type"] == "me"
-    assert payload["text"] == "dances"
+    assert payload.type == "me"
+    assert payload.text == "dances"
 
 
 def test_command_theme_unknown(app_instance):
@@ -97,8 +98,8 @@ def test_rooms_command_prints_rooms(app_instance):
 def test_search_commands_set_and_clear(app_instance):
     app_instance.messages = ["alpha", "beta alpha"]
     app_instance.message_events = [
-        {"ts": "1", "type": "chat", "author": "a", "text": "alpha"},
-        {"ts": "2", "type": "chat", "author": "a", "text": "beta alpha"},
+        ChatEvent(ts="1", type="chat", author="a", text="alpha"),
+        ChatEvent(ts="2", type="chat", author="a", text="beta alpha"),
     ]
     app_instance.handle_input("/search alpha")
     assert app_instance.search_query == "alpha"
@@ -113,7 +114,7 @@ def test_search_commands_set_and_clear(app_instance):
 def test_command_clear_resets_local_history_and_search(app_instance):
     app_instance.messages = ["msg1"]
     app_instance.message_events = [
-        {"ts": "1", "type": "chat", "author": "a", "text": "msg1"}
+        ChatEvent(ts="1", type="chat", author="a", text="msg1")
     ]
     app_instance.search_query = "msg"
     app_instance.search_hits = [0]
@@ -226,26 +227,26 @@ def test_mention_not_triggered_in_email_like_text(app_instance):
 
 def test_render_event_does_not_clip_long_text_for_system_help(app_instance):
     long_text = "x" * 800
-    event = {
-        "ts": "2026-01-01T10:00:00",
-        "type": "system",
-        "author": "system",
-        "text": long_text,
-    }
+    event = ChatEvent(
+        ts="2026-01-01T10:00:00",
+        type="system",
+        author="system",
+        text=long_text,
+    )
     rendered = app_instance.render_event(event)
     assert long_text in rendered
 
 
 def test_render_event_does_not_clip_long_text_for_ai_response(app_instance):
     long_text = "a" * 900
-    event = {
-        "ts": "2026-01-01T10:00:00",
-        "type": "ai_response",
-        "author": "system",
-        "text": long_text,
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-    }
+    event = ChatEvent(
+        ts="2026-01-01T10:00:00",
+        type="ai_response",
+        author="system",
+        text=long_text,
+        provider="openai",
+        model="gpt-4o-mini",
+    )
     rendered = app_instance.render_event(event)
     assert long_text in rendered
 
@@ -380,6 +381,7 @@ def test_explain_completion_suggests_subjects(app_instance):
 
 
 def test_parse_event_line_rejects_unknown_event_type(app_instance):
+    app_instance.ensure_services_initialized()
     event = app_instance.parse_event_line(
         '{"v":1,"ts":"2026-01-01T00:00:00","type":"mystery","author":"a","text":"b"}'
     )
@@ -387,6 +389,7 @@ def test_parse_event_line_rejects_unknown_event_type(app_instance):
 
 
 def test_parse_event_line_rejects_non_string_fields(app_instance):
+    app_instance.ensure_services_initialized()
     event = app_instance.parse_event_line(
         '{"v":1,"ts":"2026-01-01T00:00:00","type":"chat","author":123,"text":false}'
     )
@@ -394,6 +397,7 @@ def test_parse_event_line_rejects_non_string_fields(app_instance):
 
 
 def test_toolpaths_add_list_remove(app_instance, tmp_path):
+    app_instance.ensure_services_initialized()
     app_instance.save_config = MagicMock()
     target = str(tmp_path.resolve())
     app_instance.handle_input(f'/toolpaths add "{target}"')

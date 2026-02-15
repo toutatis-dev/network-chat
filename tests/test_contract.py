@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import chat
+from huddle_chat.models import ToolDefinition
 from huddle_chat.services.tool_contract import validate_tool_call_args
 
 
@@ -72,8 +73,8 @@ def test_parse_event_line_accepts_missing_version_and_extra_fields(tmp_path):
         '{"ts":"2026-02-13T12:00:00","type":"chat","author":"a","text":"b","x_meta":"ok"}'
     )
     assert event is not None
-    assert event["v"] == chat.EVENT_SCHEMA_VERSION
-    assert event["x_meta"] == "ok"
+    assert event.v == chat.EVENT_SCHEMA_VERSION
+    assert event.x_meta == "ok"
 
 
 def test_parse_event_line_rejects_future_schema_version(tmp_path):
@@ -87,11 +88,11 @@ def test_parse_event_line_rejects_future_schema_version(tmp_path):
 def test_build_event_emits_required_contract_fields(tmp_path):
     app = build_contract_app(tmp_path)
     event = app.build_event("chat", "hello")
-    assert event["v"] == chat.EVENT_SCHEMA_VERSION
-    assert isinstance(event["ts"], str)
-    assert event["type"] == "chat"
-    assert event["author"] == "ContractUser"
-    assert event["text"] == "hello"
+    assert event.v == chat.EVENT_SCHEMA_VERSION
+    assert isinstance(event.ts, str)
+    assert event.type == "chat"
+    assert event.author == "ContractUser"
+    assert event.text == "hello"
 
 
 def test_write_to_file_writes_jsonl_row_with_newline(tmp_path, monkeypatch):
@@ -162,11 +163,11 @@ def test_load_memory_entries_skips_invalid_rows(tmp_path):
 
 
 def test_validate_tool_call_args_rejects_unknown_fields():
-    definition = {
-        "name": "read_file",
-        "title": "Read File",
-        "description": "Read a bounded line range from a file.",
-        "inputSchema": {
+    definition = ToolDefinition(
+        name="read_file",
+        title="Read File",
+        description="Read a bounded line range from a file.",
+        inputSchema={
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
@@ -174,8 +175,8 @@ def test_validate_tool_call_args_rejects_unknown_fields():
             },
             "required": ["path"],
         },
-        "annotations": {},
-    }
+        annotations={},
+    )
     ok, err = validate_tool_call_args(
         definition,
         {"path": "chat.py", "startLine": 1, "unknownField": "nope"},
@@ -185,11 +186,11 @@ def test_validate_tool_call_args_rejects_unknown_fields():
 
 
 def test_validate_tool_call_args_rejects_bool_for_integer():
-    definition = {
-        "name": "read_file",
-        "title": "Read File",
-        "description": "Read a bounded line range from a file.",
-        "inputSchema": {
+    definition = ToolDefinition(
+        name="read_file",
+        title="Read File",
+        description="Read a bounded line range from a file.",
+        inputSchema={
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
@@ -197,8 +198,8 @@ def test_validate_tool_call_args_rejects_bool_for_integer():
             },
             "required": ["path"],
         },
-        "annotations": {},
-    }
+        annotations={},
+    )
     ok, err = validate_tool_call_args(
         definition, {"path": "chat.py", "startLine": True}
     )

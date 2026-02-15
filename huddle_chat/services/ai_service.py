@@ -5,6 +5,7 @@ from threading import Event as ThreadEvent, Thread
 from typing import TYPE_CHECKING, Any
 
 from huddle_chat.constants import AI_DM_ROOM, AI_RETRY_BACKOFF_SECONDS
+from huddle_chat.models import ParsedAIArgs
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -28,11 +29,16 @@ class AIService:
             return provider_value
         return True
 
-    def parse_ai_args(self, arg_text: str) -> tuple[dict[str, Any], str | None]:
+    def parse_ai_args(self, arg_text: str) -> tuple[ParsedAIArgs, str | None]:
         try:
             tokens = shlex.split(arg_text)
         except ValueError:
-            return {}, "Invalid /ai arguments. Check quotes and try again."
+            # Return empty object on error? Or just rely on error string.
+            # ParsedAIArgs requires prompt, so we need a dummy if we return error.
+            return (
+                ParsedAIArgs(prompt=""),
+                "Invalid /ai arguments. Check quotes and try again.",
+            )
 
         provider_override: str | None = None
         model_override: str | None = None
@@ -46,13 +52,19 @@ class AIService:
             token = tokens[i]
             if token == "--provider":
                 if i + 1 >= len(tokens):
-                    return {}, "Usage: /ai --provider <gemini|openai> <prompt>"
+                    return (
+                        ParsedAIArgs(prompt=""),
+                        "Usage: /ai --provider <gemini|openai> <prompt>",
+                    )
                 provider_override = tokens[i + 1].strip().lower()
                 i += 2
                 continue
             if token == "--model":
                 if i + 1 >= len(tokens):
-                    return {}, "Usage: /ai --model <model-name> <prompt>"
+                    return (
+                        ParsedAIArgs(prompt=""),
+                        "Usage: /ai --model <model-name> <prompt>",
+                    )
                 model_override = tokens[i + 1].strip()
                 i += 2
                 continue
@@ -71,7 +83,7 @@ class AIService:
             if token == "--memory-scope":
                 if i + 1 >= len(tokens):
                     return (
-                        {},
+                        ParsedAIArgs(prompt=""),
                         "Usage: /ai --memory-scope <private|repo|team[,..]> <prompt>",
                     )
                 raw_scopes = tokens[i + 1]
@@ -90,20 +102,23 @@ class AIService:
         prompt = " ".join(prompt_parts).strip()
         if not prompt:
             return (
-                {},
+                ParsedAIArgs(prompt=""),
                 "Usage: /ai [--provider <name>] [--model <name>] [--private] "
                 "[--no-memory] [--memory-scope <private|repo|team[,..]>] [--act] <prompt>",
             )
 
-        return {
-            "provider_override": provider_override,
-            "model_override": model_override,
-            "is_private": is_private,
-            "disable_memory": disable_memory,
-            "action_mode": action_mode,
-            "prompt": prompt,
-            "memory_scope_override": memory_scope_override,
-        }, None
+        return (
+            ParsedAIArgs(
+                provider_override=provider_override,
+                model_override=model_override,
+                is_private=is_private,
+                disable_memory=disable_memory,
+                action_mode=action_mode,
+                prompt=prompt,
+                memory_scope_override=memory_scope_override,
+            ),
+            None,
+        )
 
     def classify_task(self, prompt: str) -> str:
         lowered = prompt.lower()
@@ -296,38 +311,37 @@ class AIService:
             )
             return
 
-        task_class = self.classify_task(parsed["prompt"])
+        task_class = self.classify_task(parsed.prompt)
         route, route_error = self.app.resolve_route(
             task_class=task_class,
-            provider_override=parsed.get("provider_override"),
-            model_override=parsed.get("model_override"),
+            provider_override=parsed.provider_override,
+            model_override=parsed.model_override,
         )
         if route_error:
             self.app.append_system_message(route_error)
             return
         assert route is not None
-        provider = route["provider"]
-        model = route["model"]
-        prompt = parsed["prompt"]
-        disable_memory = bool(parsed.get("disable_memory"))
-        action_mode = bool(parsed.get("action_mode"))
-        is_private = bool(parsed.get("is_private")) or self.app.is_local_room()
+        provider = route.provider
+        model = route.model
+        prompt = parsed.prompt
+        disable_memory = bool(parsed.disable_memory)
+        action_mode = bool(parsed.action_mode)
+        is_private = bool(parsed.is_private) or self.app.is_local_room()
         target_room = AI_DM_ROOM if is_private else self.app.current_room
         scope = "private" if is_private else "room"
-        memory_scopes = parsed.get("memory_scope_override") or []
+        memory_scopes = parsed.memory_scope_override or []
         if not memory_scopes:
             profile = self.app.get_active_agent_profile()
-            memory_policy = profile.get("memory_policy", {})
-            if isinstance(memory_policy, dict):
-                configured_scopes = memory_policy.get("scopes", [])
-                if isinstance(configured_scopes, list):
-                    for value in configured_scopes:
-                        candidate = str(value).strip().lower()
-                        if (
-                            candidate in {"private", "repo", "team"}
-                            and candidate not in memory_scopes
-                        ):
-                            memory_scopes.append(candidate)
+            memory_policy = profile.memory_policy
+            configured_scopes = memory_policy.scopes
+            if isinstance(configured_scopes, list):
+                for value in configured_scopes:
+                    candidate = str(value).strip().lower()
+                    if (
+                        candidate in {"private", "repo", "team"}
+                        and candidate not in memory_scopes
+                    ):
+                        memory_scopes.append(candidate)
         if not memory_scopes:
             memory_scopes = ["team"]
 
@@ -345,9 +359,9 @@ class AIService:
             return
 
         prompt_event = self.app.build_event("ai_prompt", prompt)
-        prompt_event["provider"] = provider
-        prompt_event["model"] = model
-        prompt_event["request_id"] = request_id
+        prompt_event.provider = provider
+        prompt_event.model = model
+        prompt_event.request_id = request_id
         if not self.app.write_to_file(prompt_event, room=target_room):
             self.app.clear_ai_request_state(request_id)
             self.app.append_system_message("Error: Failed to persist AI prompt.")
@@ -363,7 +377,7 @@ class AIService:
             args=(
                 request_id,
                 provider,
-                route["api_key"],
+                route.api_key,
                 model,
                 prompt,
                 target_room,
@@ -402,9 +416,9 @@ class AIService:
             rerank_provider_cfg: dict[str, str] | None = None
             if rerank_route is not None:
                 rerank_provider_cfg = {
-                    "provider": rerank_route["provider"],
-                    "api_key": rerank_route["api_key"],
-                    "model": rerank_route["model"],
+                    "provider": rerank_route.provider,
+                    "api_key": rerank_route.api_key,
+                    "model": rerank_route.model,
                 }
             selected_memory, memory_warning = self.app.select_memory_for_prompt(
                 prompt=prompt,
@@ -442,7 +456,7 @@ class AIService:
         )
         if error_text:
             error_event = self.app.build_event("system", error_text)
-            error_event["request_id"] = request_id
+            error_event.request_id = request_id
             self.app.write_to_file(error_event, room=target_room)
             should_notify_private_failure = is_private and not self.app.is_local_room()
             if should_notify_private_failure:
@@ -503,19 +517,19 @@ class AIService:
 
         if self.app.is_ai_request_cancelled(request_id):
             canceled_event = self.app.build_event("system", "AI request cancelled.")
-            canceled_event["request_id"] = request_id
+            canceled_event.request_id = request_id
             self.app.write_to_file(canceled_event, room=target_room)
             self.app.clear_ai_request_state(request_id)
             self.app.refresh_output_from_events()
             return
 
         response_event = self.app.build_event("ai_response", answer)
-        response_event["provider"] = provider
-        response_event["model"] = model
-        response_event["request_id"] = request_id
+        response_event.provider = provider
+        response_event.model = model
+        response_event.request_id = request_id
         if memory_ids_used:
-            response_event["memory_ids_used"] = memory_ids_used
-            response_event["memory_topics_used"] = memory_topics_used
+            response_event.memory_ids_used = memory_ids_used
+            response_event.memory_topics_used = memory_topics_used
         if not self.app.write_to_file(response_event, room=target_room):
             self.app.clear_ai_request_state(request_id)
             self.app.append_system_message("Error: Failed to persist AI response.")
@@ -524,18 +538,18 @@ class AIService:
         ids_line = self.app.format_memory_ids_line(memory_ids_used)
         if ids_line:
             memory_event = self.app.build_event("system", ids_line)
-            memory_event["request_id"] = request_id
+            memory_event.request_id = request_id
             self.app.write_to_file(memory_event, room=target_room)
         if action_ids:
             actions_event = self.app.build_event(
                 "system",
                 f"Proposed actions: {', '.join(action_ids)}. Use /actions then /approve <id>.",
             )
-            actions_event["request_id"] = request_id
+            actions_event.request_id = request_id
             self.app.write_to_file(actions_event, room=target_room)
         if action_warning:
             warn_event = self.app.build_event("system", action_warning)
-            warn_event["request_id"] = request_id
+            warn_event.request_id = request_id
             self.app.write_to_file(warn_event, room=target_room)
 
         if is_private and not self.app.is_local_room():

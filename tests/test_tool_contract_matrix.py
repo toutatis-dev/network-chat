@@ -22,7 +22,7 @@ def test_tool_contract_accepts_minimal_valid_arguments():
     }
     registry = _registry()
     for definition in registry.get_tool_definitions():
-        name = definition["name"]
+        name = definition.name
         ok, err = validate_tool_call_args(definition, samples[name])
         assert ok is True, f"{name} should accept minimal args: {err}"
 
@@ -34,7 +34,7 @@ def test_tool_contract_rejects_unknown_argument_for_every_tool():
         "read_file": {"path": "chat.py"},
     }
     for definition in registry.get_tool_definitions():
-        name = definition["name"]
+        name = definition.name
         args = dict(seed.get(name, {}))
         args["unknownField"] = "x"
         ok, err = validate_tool_call_args(definition, args)
@@ -46,7 +46,7 @@ def test_tool_contract_rejects_missing_required_arguments():
     registry = _registry()
     required_tools = {"search_repo": "query", "read_file": "path"}
     for definition in registry.get_tool_definitions():
-        name = definition["name"]
+        name = definition.name
         if name not in required_tools:
             continue
         ok, err = validate_tool_call_args(definition, {})
@@ -68,7 +68,8 @@ def test_tool_registry_schema_matches_executor_argument_surface():
     }
     registry = _registry()
     for definition in registry.get_tool_definitions():
-        name = definition["name"]
-        props = definition.get("inputSchema", {}).get("properties", {})
+        name = definition.name
+        # inputSchema is a dict
+        props = (definition.inputSchema or {}).get("properties", {})
         assert isinstance(props, dict)
         assert set(props.keys()) == expected[name]

@@ -85,8 +85,8 @@ class ToolExecutorService:
         return str(venv_dir / "bin" / "python")
 
     def execute_tool(self, request: ToolCallRequest) -> ToolCallResult:
-        tool = request["toolName"]
-        args = request.get("arguments", {})
+        tool = request.toolName
+        args = request.arguments
         timeout = int(args.get("maxDurationSec", TOOL_CALL_TIMEOUT_SECONDS))
         try:
             if tool == "search_repo":
@@ -255,14 +255,14 @@ class ToolExecutorService:
         content: list[dict[str, Any]] = [{"type": "text", "text": text}]
         if data:
             content.append({"type": "json", "json": data})
-        return {
-            "content": content,
-            "isError": is_error,
-            "meta": {
+        return ToolCallResult(
+            content=content,
+            isError=is_error,
+            meta={
                 "exitCode": exit_code,
                 "durationMs": duration_ms,
                 "truncated": truncated,
-                "toolName": request["toolName"],
-                "actionId": request["actionId"],
+                "toolName": request.toolName,
+                "actionId": request.actionId,
             },
-        }
+        )

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from huddle_chat.help_catalog import HELP_TOPICS
+from huddle_chat.models import ChatEvent
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -155,9 +156,15 @@ class HelpService:
         return event_types
 
     def _has_ai_prompt(self) -> bool:
+        # self.app.message_events is a list[ChatEvent]
         for event in getattr(self.app, "message_events", []):
-            if str(event.get("type", "")).strip().lower() == "ai_prompt":
-                return True
+            if isinstance(event, ChatEvent):
+                if str(event.type or "").strip().lower() == "ai_prompt":
+                    return True
+            elif isinstance(event, dict):
+                # Fallback if somehow dicts sneak in (e.g. tests not fully updated)
+                if str(event.get("type", "")).strip().lower() == "ai_prompt":
+                    return True
         ai_dm_file = self.app.get_local_message_file("ai-dm")
         return "ai_prompt" in self._scan_recent_event_types(ai_dm_file)
 

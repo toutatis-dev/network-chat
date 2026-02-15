@@ -269,5 +269,5 @@ def test_load_recent_messages_uses_tail_for_large_history(tmp_path):
     app.load_recent_messages()
 
     assert len(app.message_events) == chat.MAX_MESSAGES
-    assert app.message_events[0]["text"] == "line-25"
-    assert app.message_events[-1]["text"] == f"line-{chat.MAX_MESSAGES + 24}"
+    assert app.message_events[0].text == "line-25"
+    assert app.message_events[-1].text == f"line-{chat.MAX_MESSAGES + 24}"

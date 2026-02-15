@@ -294,7 +294,7 @@ class SlashCompleter(Completer):
                 app_ref.ensure_services_initialized()
             if hasattr(app_ref, "tool_service"):
                 defs = app_ref.tool_service.registry.get_tool_definitions()
-                names = [str(row.get("name", "")).strip() for row in defs]
+                names = [str(row.name or "").strip() for row in defs]
                 names = [name for name in names if name]
                 if names:
                     return sorted(set(names))

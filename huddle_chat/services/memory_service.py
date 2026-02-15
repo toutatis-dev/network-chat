@@ -21,6 +21,7 @@ from huddle_chat.constants import (
     LOCK_TIMEOUT_SECONDS,
     MEMORY_DUPLICATE_THRESHOLD,
 )
+from huddle_chat.models import ChatEvent
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -405,9 +406,9 @@ class MemoryService:
             time.sleep(delay + random.uniform(0, 0.03))
         return False
 
-    def get_last_ai_response_event(self) -> dict[str, Any] | None:
+    def get_last_ai_response_event(self) -> ChatEvent | None:
         for event in reversed(self.app.message_events):
-            if str(event.get("type", "")) == "ai_response":
+            if event.type == "ai_response":
                 return event
         return None
 
@@ -432,9 +433,9 @@ class MemoryService:
             return None
         return None
 
-    def build_memory_source(self, event: dict[str, Any]) -> str:
-        request_id = str(event.get("request_id", "")).strip()
-        ts = str(event.get("ts", "")).strip()
+    def build_memory_source(self, event: ChatEvent) -> str:
+        request_id = str(event.request_id or "").strip()
+        ts = str(event.ts).strip()
         if request_id:
             return f"room:{self.app.current_room} request:{request_id} ts:{ts}"
         return f"room:{self.app.current_room} ts:{ts}"
@@ -451,7 +452,7 @@ class MemoryService:
             return None, config_error
         assert provider_cfg
 
-        source_text = str(source_event.get("text", "")).strip()
+        source_text = str(source_event.text or "").strip()
         if not source_text:
             return None, "Last AI response was empty."
 
@@ -489,15 +490,14 @@ class MemoryService:
             "confidence": confidence,
             "source": self.build_memory_source(source_event),
             "room": self.app.current_room,
-            "origin_event_ref": str(
-                source_event.get("request_id", source_event.get("ts", ""))
-            ),
+            "origin_event_ref": str(source_event.request_id or source_event.ts or ""),
             "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
             "scope": "team",
         }
         return draft, None
 
     def show_memory_draft_preview(self) -> None:
+
         self.ensure_memory_state_initialized()
         if not self.app.memory_draft_active or not isinstance(
             self.app.memory_draft, dict

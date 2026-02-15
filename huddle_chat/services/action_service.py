@@ -33,11 +33,12 @@ class ActionService:
     ) -> str:
         self.ensure_pending_actions_initialized()
         action_id = uuid4().hex[:8]
+        agent_profile = self.app.get_active_agent_profile()
         row = {
             "action_id": action_id,
             "ts": datetime.now().isoformat(timespec="seconds"),
             "user": self.app.name,
-            "agent_profile": self.app.get_active_agent_profile().get("id", "default"),
+            "agent_profile": str(agent_profile.id or "default"),
             "tool": tool,
             "summary": summary,
             "command_preview": command_preview,
@@ -104,12 +105,12 @@ class ActionService:
             f"Running action {action_id}: {action.get('summary', '')}"
         )
         result = self.app.tool_service.execute_action(action)
-        meta = result.get("meta", {})
-        is_error = bool(result.get("isError", False))
+        meta = result.meta
+        is_error = result.isError
         status = "failed" if is_error else "completed"
         action["status"] = status
         output_text = ""
-        content = result.get("content", [])
+        content = result.content
         if isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -124,7 +125,7 @@ class ActionService:
                 "action_id": action_id,
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "status": status,
-                "result": result,
+                "result": result.model_dump(exclude_none=True),
                 "user": self.app.name,
             },
         )

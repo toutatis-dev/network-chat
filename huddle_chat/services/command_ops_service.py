@@ -1,6 +1,8 @@
 import shlex
 from typing import TYPE_CHECKING, Any
 
+from huddle_chat.models import ChatEvent, MemoryPolicy, RoutingPolicy
+
 if TYPE_CHECKING:
     from chat import ChatApp
 
@@ -187,7 +189,7 @@ class CommandOpsService:
             )
         )
 
-    def parse_share_selector(self, selector: str) -> list[dict[str, Any]]:
+    def parse_share_selector(self, selector: str) -> list[ChatEvent]:
         if not self.app.message_events:
             return []
         selector = selector.strip()
@@ -241,15 +243,15 @@ class CommandOpsService:
 
         shared_count = 0
         for event in selected_events:
-            event_type = str(event.get("type", "chat"))
+            event_type = str(event.type or "chat")
             if event_type not in ("ai_prompt", "ai_response", "chat", "me", "system"):
                 continue
-            payload = self.app.build_event(event_type, str(event.get("text", "")))
+            payload = self.app.build_event(event_type, str(event.text or ""))
             if event_type in ("ai_prompt", "ai_response"):
-                payload["provider"] = event.get(
-                    "provider", self.app.ai_config.get("default_provider", "ai")
+                payload.provider = event.provider or self.app.ai_config.get(
+                    "default_provider", "ai"
                 )
-                payload["model"] = event.get("model", "")
+                payload.model = event.model or ""
             if self.app.write_to_file(payload, room=target_room):
                 shared_count += 1
         self.app.append_system_message(
@@ -299,11 +301,11 @@ class CommandOpsService:
                 return
             lines = ["Agent profiles:"]
             for profile in profiles:
-                profile_id = str(profile.get("id", "")).strip()
+                profile_id = str(profile.id).strip()
                 marker = "*" if profile_id == active_id else " "
-                name = str(profile.get("name", "")).strip()
+                name = str(profile.name).strip()
                 lines.append(
-                    f"{marker} {profile_id} ({name or 'unnamed'}) v{profile.get('version', 1)}"
+                    f"{marker} {profile_id} ({name or 'unnamed'}) v{profile.version or 1}"
                 )
             self.app.append_system_message("\n".join(lines))
             return
@@ -322,29 +324,21 @@ class CommandOpsService:
                 if len(tokens) >= 2
                 else self.app.agent_service.get_active_profile_id()
             )
-            profile_data: Any = self.app.agent_service.get_profile(profile_id)
+            profile_data = self.app.agent_service.get_profile(profile_id)
             if profile_data is None:
                 self.app.append_system_message(
                     f"Unknown agent profile '{self.app.sanitize_agent_id(profile_id)}'."
                 )
                 return
-            memory_policy = profile_data.get("memory_policy", {})
-            scopes: list[str] = []
-            if isinstance(memory_policy, dict):
-                raw_scopes = memory_policy.get("scopes", [])
-                if isinstance(raw_scopes, list):
-                    scopes = [str(item) for item in raw_scopes]
-            routes = profile_data.get("routing_policy", {})
-            route_count = 0
-            if isinstance(routes, dict):
-                route_map = routes.get("routes", {})
-                if isinstance(route_map, dict):
-                    route_count = len(route_map)
+            memory_policy = profile_data.memory_policy
+            scopes = memory_policy.scopes
+            routes = profile_data.routing_policy.routes
+            route_count = len(routes)
             self.app.append_system_message(
-                f"Agent profile {profile_data.get('id', '?')}: "
-                f"name={profile_data.get('name', '')}, "
+                f"Agent profile {profile_data.id}: "
+                f"name={profile_data.name}, "
                 f"memory_scopes={','.join(scopes) if scopes else 'team'}, "
-                f"routes={route_count}, version={profile_data.get('version', 1)}"
+                f"routes={route_count}, version={profile_data.version or 1}"
             )
             return
 
@@ -361,7 +355,7 @@ class CommandOpsService:
                 )
                 return
             active = self.app.agent_service.get_active_profile()
-            active["memory_policy"] = {"scopes": scopes}
+            active.memory_policy = MemoryPolicy(scopes=scopes)
             ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
             if not ok:
                 self.app.append_system_message(msg)
@@ -386,16 +380,12 @@ class CommandOpsService:
                 )
                 return
             active = self.app.agent_service.get_active_profile()
-            active_any: Any = active
-            routing_policy_any: Any = active_any.get("routing_policy", {})
-            if not isinstance(routing_policy_any, dict):
-                routing_policy_any = {}
-            route_map_any: Any = routing_policy_any.get("routes", {})
-            if not isinstance(route_map_any, dict):
-                route_map_any = {}
-            route_map_any[task_class] = {"provider": provider, "model": model}
-            routing_policy_any["routes"] = route_map_any
-            active_any["routing_policy"] = routing_policy_any
+            if not active.routing_policy:
+                active.routing_policy = RoutingPolicy()
+            active.routing_policy.routes[task_class] = {
+                "provider": provider,
+                "model": model,
+            }
             ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
             if not ok:
                 self.app.append_system_message(msg)

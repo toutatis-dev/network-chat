@@ -19,27 +19,30 @@ class RoutingService:
         model_override: str | None,
     ) -> tuple[ResolvedRoute | None, str | None]:
         profile = self.app.get_active_agent_profile()
-        profile_id = str(profile.get("id", DEFAULT_AGENT_PROFILE_ID))
+        profile_id = str(profile.id or DEFAULT_AGENT_PROFILE_ID)
         route_provider = provider_override
         route_model = model_override
         reason_parts = [f"task={task_class}", f"profile={profile_id}"]
 
-        routing_policy = profile.get("routing_policy", {})
-        if isinstance(routing_policy, dict):
-            routes = routing_policy.get("routes", {})
-            if isinstance(routes, dict):
-                route_cfg = routes.get(task_class, {})
-                if isinstance(route_cfg, dict):
-                    if route_provider is None:
-                        candidate = str(route_cfg.get("provider", "")).strip().lower()
-                        if candidate:
-                            route_provider = candidate
-                            reason_parts.append("provider=policy")
-                    if route_model is None:
-                        candidate_model = str(route_cfg.get("model", "")).strip()
-                        if candidate_model:
-                            route_model = candidate_model
-                            reason_parts.append("model=policy")
+        routing_policy = profile.routing_policy
+        # Pydantic models are not dicts, assume valid structure if initialized
+        routes = routing_policy.routes
+        route_cfg = routes.get(task_class)
+
+        if route_cfg:
+            # route_cfg is a dict in the current Pydantic model definition?
+            # models.py: routes: dict[str, dict[str, str]]
+            # Yes, it's a dict of dicts.
+            if route_provider is None:
+                candidate = str(route_cfg.get("provider", "")).strip().lower()
+                if candidate:
+                    route_provider = candidate
+                    reason_parts.append("provider=policy")
+            if route_model is None:
+                candidate_model = str(route_cfg.get("model", "")).strip()
+                if candidate_model:
+                    route_model = candidate_model
+                    reason_parts.append("model=policy")
 
         provider_cfg, error = self.app.resolve_ai_provider_config(
             route_provider, route_model
@@ -48,11 +51,11 @@ class RoutingService:
             return None, error
         assert provider_cfg
         return (
-            {
-                "provider": provider_cfg["provider"],
-                "model": provider_cfg["model"],
-                "api_key": provider_cfg["api_key"],
-                "reason": ",".join(reason_parts),
-            },
+            ResolvedRoute(
+                provider=provider_cfg["provider"],
+                model=provider_cfg["model"],
+                api_key=provider_cfg["api_key"],
+                reason=",".join(reason_parts),
+            ),
             None,
         )
