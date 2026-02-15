@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from huddle_chat.event_helpers import emit_system_message
 from huddle_chat.help_catalog import HELP_TOPICS
 from huddle_chat.models import ChatEvent
 
@@ -65,11 +66,11 @@ class HelpService:
     def handle_help_command(self, args: str) -> None:
         topic = args.strip()
         if not topic:
-            self.app.append_system_message(self.render_help("overview"))
+            emit_system_message(self.app, self.render_help("overview"))
             topics = ", ".join(self.get_help_topics())
-            self.app.append_system_message(f"Help topics: {topics}")
+            emit_system_message(self.app, f"Help topics: {topics}")
             return
-        self.app.append_system_message(self.render_help(topic))
+        emit_system_message(self.app, self.render_help(topic))
 
     def _onboarding_default_state(self) -> dict[str, Any]:
         return {
@@ -254,27 +255,28 @@ class HelpService:
             state["completed_at"] = ""
             state = self._sync_onboarding_state(state)
             self.save_onboarding_state(state)
-            self.app.append_system_message("Onboarding started.")
-            self.app.append_system_message(self.render_onboarding_status(state))
+            emit_system_message(self.app, "Onboarding started.")
+            emit_system_message(self.app, self.render_onboarding_status(state))
             return
 
         if action == "reset":
             state = self._onboarding_default_state()
             self.save_onboarding_state(state)
-            self.app.append_system_message("Onboarding state reset.")
-            self.app.append_system_message("Run /onboard start to begin again.")
+            emit_system_message(self.app, "Onboarding state reset.")
+            emit_system_message(self.app, "Run /onboard start to begin again.")
             return
 
         if action == "status":
             state = self._sync_onboarding_state(state)
             self.save_onboarding_state(state)
-            self.app.append_system_message(self.render_onboarding_status(state))
+            emit_system_message(self.app, self.render_onboarding_status(state))
             return
 
-        self.app.append_system_message(
+        emit_system_message(
+            self.app,
             self.format_guided_error(
                 problem=f"Unknown /onboard command '{action}'.",
                 why="Supported onboarding actions are fixed for consistent guidance.",
                 next_step="Run /onboard status, /onboard start, or /onboard reset.",
-            )
+            ),
         )

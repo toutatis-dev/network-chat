@@ -15,6 +15,7 @@ from huddle_chat.constants import (
     AI_MEMORY_SUMMARY_CHAR_LIMIT,
     MEMORY_DUPLICATE_THRESHOLD,
 )
+from huddle_chat.event_helpers import emit_system_message
 from huddle_chat.models import ChatEvent
 
 if TYPE_CHECKING:
@@ -338,7 +339,7 @@ class MemoryService:
             topic = str(entry.get("topic", "general"))
             summary = str(entry.get("summary", ""))[:120]
             lines.append(f"{mem_id} [{topic}] {summary}")
-        self.app.append_system_message("\n".join(lines))
+        emit_system_message(self.app, "\n".join(lines))
 
     def write_memory_entry(self, entry: dict[str, Any], scope: str = "team") -> bool:
         normalized_scope = self.normalize_memory_scopes([scope])[0]
@@ -441,7 +442,7 @@ class MemoryService:
         if not self.app.memory_draft_active or not isinstance(
             self.app.memory_draft, dict
         ):
-            self.app.append_system_message("No active memory draft.")
+            emit_system_message(self.app, "No active memory draft.")
             return
         draft = self.app.memory_draft
         preview = (
@@ -452,33 +453,33 @@ class MemoryService:
             f"Source: {draft.get('source', '')}\n"
             f"Scope: {draft.get('scope', 'team')}"
         )
-        self.app.append_system_message(preview)
+        emit_system_message(self.app, preview)
         if self.app.memory_draft_mode == "confirm":
-            self.app.append_system_message("Confirm memory entry? (y/n)")
+            emit_system_message(self.app, "Confirm memory entry? (y/n)")
 
     def confirm_memory_draft(self) -> None:
         self.ensure_memory_state_initialized()
         if not self.app.memory_draft_active or not isinstance(
             self.app.memory_draft, dict
         ):
-            self.app.append_system_message("No active memory draft.")
+            emit_system_message(self.app, "No active memory draft.")
             return
         draft = self.app.memory_draft
         summary = str(draft.get("summary", "")).strip()
         source = str(draft.get("source", "")).strip()
         confidence = str(draft.get("confidence", "")).strip().lower()
         if not summary:
-            self.app.append_system_message(
-                "Draft summary is empty. Use /memory edit summary <text>."
+            emit_system_message(
+                self.app, "Draft summary is empty. Use /memory edit summary <text>."
             )
             return
         if not source:
-            self.app.append_system_message(
-                "Draft source is empty. Use /memory edit source <text>."
+            emit_system_message(
+                self.app, "Draft source is empty. Use /memory edit source <text>."
             )
             return
         if confidence not in {"low", "med", "high"}:
-            self.app.append_system_message("Confidence must be low, med, or high.")
+            emit_system_message(self.app, "Confidence must be low, med, or high.")
             return
 
         entry = {
@@ -503,9 +504,9 @@ class MemoryService:
             if used_override
             else self.write_memory_entry(entry, scope=str(entry.get("scope", "team")))
         ):
-            self.app.append_system_message("Failed to write shared memory entry.")
+            emit_system_message(self.app, "Failed to write shared memory entry.")
             return
-        self.app.append_system_message(f"Memory saved: {entry['id']}")
+        emit_system_message(self.app, f"Memory saved: {entry['id']}")
         self.clear_memory_draft()
 
     def handle_memory_confirmation_input(self, text: str) -> bool:
@@ -520,9 +521,10 @@ class MemoryService:
             return True
         if lowered == "n":
             self.app.memory_draft_mode = "edit"
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 "Draft rejected. Edit fields: /memory edit summary|topic|confidence|source|scope <value>. "
-                "Then use /memory confirm or /memory cancel."
+                "Then use /memory confirm or /memory cancel.",
             )
             return True
         return False
@@ -531,38 +533,41 @@ class MemoryService:
         self.ensure_memory_state_initialized()
         trimmed = args.strip()
         if not trimmed or trimmed.lower() == "help":
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 "Memory commands: /memory add, /memory confirm, /memory cancel, "
                 "/memory show-draft, /memory edit <field> <value>, /memory list [N], /memory search <text>, "
-                "/memory scope <private|repo|team>"
+                "/memory scope <private|repo|team>",
             )
             return
 
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="Invalid /memory syntax.",
                     why="Unbalanced quotes or malformed token boundaries were detected.",
                     next_step="Run /help memory and retry your /memory command.",
-                )
+                ),
             )
             return
         if not tokens:
-            self.app.append_system_message("Usage: /memory help")
+            emit_system_message(self.app, "Usage: /memory help")
             return
 
         action = tokens[0].lower()
         if action == "add":
             if self.app.memory_draft_active:
-                self.app.append_system_message(
-                    "A memory draft is already active. Use /memory confirm or /memory cancel."
+                emit_system_message(
+                    self.app,
+                    "A memory draft is already active. Use /memory confirm or /memory cancel.",
                 )
                 return
             draft, error = self.draft_memory_from_last_ai_response()
             if error:
-                self.app.append_system_message(error)
+                emit_system_message(self.app, error)
                 return
             assert draft is not None
             self.app.memory_draft = draft
@@ -582,53 +587,57 @@ class MemoryService:
 
         if action == "cancel":
             if not self.app.memory_draft_active:
-                self.app.append_system_message(
+                emit_system_message(
+                    self.app,
                     self.app.help_service.format_guided_error(
                         problem="No active memory draft.",
                         why="There is nothing to confirm or cancel yet.",
                         next_step="Run /memory add to draft from the latest AI response.",
-                    )
+                    ),
                 )
                 return
             self.clear_memory_draft()
-            self.app.append_system_message("Memory draft canceled.")
+            emit_system_message(self.app, "Memory draft canceled.")
             return
 
         if action == "edit":
             if not self.app.memory_draft_active or not isinstance(
                 self.app.memory_draft, dict
             ):
-                self.app.append_system_message(
+                emit_system_message(
+                    self.app,
                     self.app.help_service.format_guided_error(
                         problem="No active memory draft.",
                         why="Draft editing requires an existing draft context.",
                         next_step="Run /memory add first, then /memory edit ...",
-                    )
+                    ),
                 )
                 return
             if len(tokens) < 3:
-                self.app.append_system_message(
-                    "Usage: /memory edit <summary|topic|confidence|source|scope> <value>"
+                emit_system_message(
+                    self.app,
+                    "Usage: /memory edit <summary|topic|confidence|source|scope> <value>",
                 )
                 return
             field = tokens[1].strip().lower()
             value = " ".join(tokens[2:]).strip()
             if field not in {"summary", "topic", "confidence", "source", "scope"}:
-                self.app.append_system_message(
-                    "Editable fields: summary, topic, confidence, source, scope."
+                emit_system_message(
+                    self.app,
+                    "Editable fields: summary, topic, confidence, source, scope.",
                 )
                 return
             if field == "confidence":
                 value = value.lower()
                 if value not in {"low", "med", "high"}:
-                    self.app.append_system_message(
-                        "Confidence must be low, med, or high."
+                    emit_system_message(
+                        self.app, "Confidence must be low, med, or high."
                     )
                     return
             if field == "scope":
                 value = self.normalize_memory_scopes([value])[0]
             self.app.memory_draft[field] = value
-            self.app.append_system_message(f"Updated draft {field}.")
+            emit_system_message(self.app, f"Updated draft {field}.")
             self.show_memory_draft_preview()
             return
 
@@ -636,20 +645,20 @@ class MemoryService:
             if not self.app.memory_draft_active or not isinstance(
                 self.app.memory_draft, dict
             ):
-                self.app.append_system_message(
-                    "No active memory draft. Run /memory add first."
+                emit_system_message(
+                    self.app, "No active memory draft. Run /memory add first."
                 )
                 return
             if len(tokens) < 2:
-                self.app.append_system_message(
-                    "Usage: /memory scope <private|repo|team>"
+                emit_system_message(
+                    self.app, "Usage: /memory scope <private|repo|team>"
                 )
                 return
             self.app.memory_draft["scope"] = self.normalize_memory_scopes([tokens[1]])[
                 0
             ]
-            self.app.append_system_message(
-                f"Updated draft scope to {self.app.memory_draft['scope']}."
+            emit_system_message(
+                self.app, f"Updated draft scope to {self.app.memory_draft['scope']}."
             )
             self.show_memory_draft_preview()
             return
@@ -660,14 +669,14 @@ class MemoryService:
                 try:
                     limit = max(1, min(100, int(tokens[1])))
                 except ValueError:
-                    self.app.append_system_message("Usage: /memory list [limit]")
+                    emit_system_message(self.app, "Usage: /memory list [limit]")
                     return
             used_override, override_entries = self._call_instance_override(
                 "load_memory_entries"
             )
             entries = override_entries if used_override else self.load_memory_entries()
             if not entries:
-                self.app.append_system_message("No shared memory entries found.")
+                emit_system_message(self.app, "No shared memory entries found.")
                 return
             lines = ["Shared Memory:"]
             for entry in entries[-limit:]:
@@ -675,12 +684,12 @@ class MemoryService:
                     f"{entry.get('id', '?')} [{entry.get('confidence', '?')}] "
                     f"{entry.get('topic', 'general')}: {entry.get('summary', '')}"
                 )
-            self.app.append_system_message("\n".join(lines))
+            emit_system_message(self.app, "\n".join(lines))
             return
 
         if action == "search":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /memory search <query>")
+                emit_system_message(self.app, "Usage: /memory search <query>")
                 return
             query = " ".join(tokens[1:]).strip().lower()
             used_override, override_entries = self._call_instance_override(
@@ -699,20 +708,21 @@ class MemoryService:
                 if query in haystack:
                     matches.append(entry)
             if not matches:
-                self.app.append_system_message(f"No memory matches for '{query}'.")
+                emit_system_message(self.app, f"No memory matches for '{query}'.")
                 return
             lines = [f"Memory matches ({len(matches)}):"]
             for entry in matches[-10:]:
                 lines.append(
                     f"{entry.get('id', '?')} [{entry.get('topic', 'general')}] {entry.get('summary', '')}"
                 )
-            self.app.append_system_message("\n".join(lines))
+            emit_system_message(self.app, "\n".join(lines))
             return
 
-        self.app.append_system_message(
+        emit_system_message(
+            self.app,
             self.app.help_service.format_guided_error(
                 problem=f"Unknown /memory command '{action}'.",
                 why="The subcommand is not part of the current /memory command set.",
                 next_step="Run /help memory for supported commands.",
-            )
+            ),
         )

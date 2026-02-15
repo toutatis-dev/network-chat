@@ -5,6 +5,7 @@ from threading import Event as ThreadEvent, Thread
 from typing import TYPE_CHECKING, Any
 
 from huddle_chat.constants import AI_DM_ROOM, AI_RETRY_BACKOFF_SECONDS
+from huddle_chat.event_helpers import emit_refresh_output, emit_system_message
 from huddle_chat.models import ParsedAIArgs
 
 if TYPE_CHECKING:
@@ -291,23 +292,24 @@ class AIService:
     def handle_ai_command(self, args: str) -> None:
         lowered = args.strip().lower()
         if lowered == "status":
-            self.app.append_system_message(self.app.controller.build_ai_status_text())
+            emit_system_message(self.app, self.app.controller.build_ai_status_text())
             return
         if lowered == "cancel":
             if self.app.controller.request_ai_cancel():
-                self.app.append_system_message("AI cancellation requested.")
+                emit_system_message(self.app, "AI cancellation requested.")
             else:
-                self.app.append_system_message("No active AI request.")
+                emit_system_message(self.app, "No active AI request.")
             return
 
         parsed, parse_error = self.parse_ai_args(args)
         if parse_error:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem=parse_error,
                     why="AI command parsing failed due to missing/invalid flags or prompt.",
                     next_step="Run /help ai and retry with one of the documented examples.",
-                )
+                ),
             )
             return
 
@@ -318,7 +320,7 @@ class AIService:
             model_override=parsed.model_override,
         )
         if route_error:
-            self.app.append_system_message(route_error)
+            emit_system_message(self.app, route_error)
             return
         assert route is not None
         provider = route.provider
@@ -349,12 +351,13 @@ class AIService:
             provider=provider, model=model, target_room=target_room, scope=scope
         )
         if request_id is None:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="AI busy: another request is active.",
                     why="Only one active local AI request is supported at a time.",
                     next_step="Run /ai status or /ai cancel, then submit the next request.",
-                )
+                ),
             )
             return
 
@@ -364,13 +367,14 @@ class AIService:
         prompt_event.request_id = request_id
         if not self.app.write_to_file(prompt_event, room=target_room):
             self.app.controller.clear_ai_request_state(request_id)
-            self.app.append_system_message("Error: Failed to persist AI prompt.")
+            emit_system_message(self.app, "Error: Failed to persist AI prompt.")
             return
 
-        self.app.append_system_message(
-            f"AI request sent ({scope}) via {provider}:{model} [{request_id}]."
+        emit_system_message(
+            self.app,
+            f"AI request sent ({scope}) via {provider}:{model} [{request_id}].",
         )
-        self.app.refresh_output_from_events()
+        emit_refresh_output(self.app)
 
         self.create_thread(
             target=self.process_ai_response,
@@ -433,7 +437,7 @@ class AIService:
                 )
             )
             if memory_warning:
-                self.app.append_system_message(memory_warning)
+                emit_system_message(self.app, memory_warning)
             memory_context = self.app.memory_service.build_memory_context_block(
                 selected_memory
             )
@@ -466,11 +470,11 @@ class AIService:
             if should_notify_private_failure:
                 should_notify_private_failure = "cancelled" not in error_text.lower()
             if should_notify_private_failure:
-                self.app.append_system_message(
-                    f"AI request failed in #ai-dm: {error_text}"
+                emit_system_message(
+                    self.app, f"AI request failed in #ai-dm: {error_text}"
                 )
             self.app.controller.clear_ai_request_state(request_id)
-            self.app.refresh_output_from_events()
+            emit_refresh_output(self.app)
             return
         assert answer is not None
 
@@ -524,7 +528,7 @@ class AIService:
             canceled_event.request_id = request_id
             self.app.write_to_file(canceled_event, room=target_room)
             self.app.controller.clear_ai_request_state(request_id)
-            self.app.refresh_output_from_events()
+            emit_refresh_output(self.app)
             return
 
         response_event = self.app.build_event("ai_response", answer)
@@ -536,7 +540,7 @@ class AIService:
             response_event.memory_topics_used = memory_topics_used
         if not self.app.write_to_file(response_event, room=target_room):
             self.app.controller.clear_ai_request_state(request_id)
-            self.app.append_system_message("Error: Failed to persist AI response.")
+            emit_system_message(self.app, "Error: Failed to persist AI response.")
             return
 
         ids_line = self.app.memory_service.format_memory_ids_line(memory_ids_used)
@@ -557,11 +561,12 @@ class AIService:
             self.app.write_to_file(warn_event, room=target_room)
 
         if is_private and not self.app.is_local_room():
-            self.app.append_system_message(
-                "Private AI response saved to #ai-dm. Use /join ai-dm to review."
+            emit_system_message(
+                self.app,
+                "Private AI response saved to #ai-dm. Use /join ai-dm to review.",
             )
         self.app.controller.clear_ai_request_state(request_id)
-        self.app.refresh_output_from_events()
+        emit_refresh_output(self.app)
 
     def _build_stream_preview_handler(self, request_id: str) -> Callable[[str], None]:
         chunks: list[str] = []

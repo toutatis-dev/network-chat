@@ -14,6 +14,7 @@ from huddle_chat.constants import (
     LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
 )
+from huddle_chat.event_helpers import emit_rebuild_search, emit_refresh_output
 from huddle_chat.models import ChatEvent
 from pydantic import ValidationError
 
@@ -110,8 +111,8 @@ class StorageService:
             self.app.last_pos_by_room[self.app.current_room] = 0
 
         self.app.message_events = loaded_events[-MAX_MESSAGES:]
-        self.app.refresh_output_from_events()
-        self.app.rebuild_search_hits()
+        emit_refresh_output(self.app)
+        emit_rebuild_search(self.app)
 
     def write_to_file(
         self, payload: dict[str, Any] | str | ChatEvent, room: str | None = None

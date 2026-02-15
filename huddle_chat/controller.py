@@ -7,6 +7,13 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from huddle_chat.constants import MAX_MESSAGES, PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS
+from huddle_chat.event_bus import EventBus
+from huddle_chat.events import (
+    RebuildSearchEvent,
+    RefreshOutputEvent,
+    RunCommandEvent,
+    SystemMessageEvent,
+)
 from huddle_chat.models import ChatEvent
 from huddle_chat.commands.registry import CommandRegistry
 
@@ -25,6 +32,24 @@ class ChatController:
     def build_command_handlers(self) -> dict[str, Any]:
         self.command_handlers = CommandRegistry(self).build()
         return self.command_handlers
+
+    def register_event_handlers(self, bus: EventBus) -> None:
+        bus.subscribe(SystemMessageEvent, self.on_system_message_event)
+        bus.subscribe(RefreshOutputEvent, self.on_refresh_output_event)
+        bus.subscribe(RebuildSearchEvent, self.on_rebuild_search_event)
+        bus.subscribe(RunCommandEvent, self.on_run_command_event)
+
+    def on_system_message_event(self, event: SystemMessageEvent) -> None:
+        self.app.append_system_message(event.text)
+
+    def on_refresh_output_event(self, _event: RefreshOutputEvent) -> None:
+        self.refresh_output_from_events()
+
+    def on_rebuild_search_event(self, _event: RebuildSearchEvent) -> None:
+        self.rebuild_search_hits()
+
+    def on_run_command_event(self, event: RunCommandEvent) -> None:
+        self.handle_input(event.command_text)
 
     def handle_input(self, text: str) -> None:
         self.app.ensure_services_initialized()

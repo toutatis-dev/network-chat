@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from huddle_chat.event_helpers import emit_run_command, emit_system_message
 from huddle_chat.models import PlaybookDefinition, PlaybookStep
 from huddle_chat.playbook_catalog import PLAYBOOKS
 
@@ -74,7 +75,7 @@ class PlaybookService:
             total = len(steps)
             if idx >= total:
                 name = str(state.get("name", "playbook"))
-                self.app.append_system_message(f"Playbook '{name}' completed.")
+                emit_system_message(self.app, f"Playbook '{name}' completed.")
                 self._clear_run_state()
                 return
 
@@ -84,17 +85,17 @@ class PlaybookService:
                 state["step_index"] = idx + 1
                 continue
 
-            self.app.append_system_message(
-                self._step_status_header(step, idx + 1, total)
+            emit_system_message(
+                self.app, self._step_status_header(step, idx + 1, total)
             )
 
             if step.requires_input:
                 command_template = str(step.command_template or "").strip()
-                self.app.append_system_message(
-                    f"Manual input required: {command_template}"
+                emit_system_message(
+                    self.app, f"Manual input required: {command_template}"
                 )
-                self.app.append_system_message(
-                    f"Expected result: {step.expected_result or ''}"
+                emit_system_message(
+                    self.app, f"Expected result: {step.expected_result or ''}"
                 )
                 self._clear_run_state()
                 return
@@ -108,13 +109,13 @@ class PlaybookService:
                 state["awaiting_confirmation"] = True
                 state["pending_command"] = command
                 state["pending_title"] = str(step.title or "step")
-                self.app.append_system_message(
-                    "Confirmation required for mutating step. Continue? (y/n)"
+                emit_system_message(
+                    self.app, "Confirmation required for mutating step. Continue? (y/n)"
                 )
                 return
 
-            self.app.append_system_message(f"Auto-running: {command}")
-            self.app.controller.handle_input(command)
+            emit_system_message(self.app, f"Auto-running: {command}")
+            emit_run_command(self.app, command)
             state["step_index"] = idx + 1
 
     def handle_confirmation_input(self, text: str) -> bool:
@@ -131,14 +132,14 @@ class PlaybookService:
 
         if lowered == "n":
             title = str(state.get("pending_title", "step"))
-            self.app.append_system_message(f"Playbook cancelled at step: {title}")
+            emit_system_message(self.app, f"Playbook cancelled at step: {title}")
             self._clear_run_state()
             return True
 
         command = str(state.get("pending_command", "")).strip()
         if command:
-            self.app.append_system_message(f"Confirmed. Running: {command}")
-            self.app.controller.handle_input(command)
+            emit_system_message(self.app, f"Confirmed. Running: {command}")
+            emit_run_command(self.app, command)
 
         state["awaiting_confirmation"] = False
         state["pending_command"] = ""
@@ -150,8 +151,9 @@ class PlaybookService:
     def handle_playbook_command(self, args: str) -> None:
         trimmed = args.strip()
         if not trimmed or trimmed.lower() == "help":
-            self.app.append_system_message(
-                "Playbook commands: /playbook list, /playbook show <name>, /playbook run <name>"
+            emit_system_message(
+                self.app,
+                "Playbook commands: /playbook list, /playbook show <name>, /playbook run <name>",
             )
             return
 
@@ -163,44 +165,45 @@ class PlaybookService:
             lines = ["Available playbooks:"]
             for name, summary in rows:
                 lines.append(f"- {name}: {summary}")
-            self.app.append_system_message("\n".join(lines))
+            emit_system_message(self.app, "\n".join(lines))
             return
 
         if action == "show":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /playbook show <name>")
+                emit_system_message(self.app, "Usage: /playbook show <name>")
                 return
             playbook = self.get_playbook(tokens[1])
             if playbook is None:
-                self.app.append_system_message(
-                    f"Unknown playbook '{tokens[1]}'. Run /playbook list."
+                emit_system_message(
+                    self.app, f"Unknown playbook '{tokens[1]}'. Run /playbook list."
                 )
                 return
-            self.app.append_system_message(self.render_playbook(playbook))
+            emit_system_message(self.app, self.render_playbook(playbook))
             return
 
         if action == "run":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /playbook run <name>")
+                emit_system_message(self.app, "Usage: /playbook run <name>")
                 return
             playbook = self.get_playbook(tokens[1])
             if playbook is None:
-                self.app.append_system_message(
-                    f"Unknown playbook '{tokens[1]}'. Run /playbook list."
+                emit_system_message(
+                    self.app, f"Unknown playbook '{tokens[1]}'. Run /playbook list."
                 )
                 return
             if self.app.controller.is_ai_request_active():
-                self.app.append_system_message(
-                    "Cannot start playbook run while AI request is active. Use /ai status or /ai cancel first."
+                emit_system_message(
+                    self.app,
+                    "Cannot start playbook run while AI request is active. Use /ai status or /ai cancel first.",
                 )
                 return
             self._start_run_state(playbook)
-            self.app.append_system_message(
-                f"Playbook '{playbook.name}' started (semi-automated mode)."
+            emit_system_message(
+                self.app, f"Playbook '{playbook.name}' started (semi-automated mode)."
             )
             self._advance_run()
             return
 
-        self.app.append_system_message(
-            f"Unknown /playbook command '{action}'. Run /playbook help."
+        emit_system_message(
+            self.app, f"Unknown /playbook command '{action}'. Run /playbook help."
         )

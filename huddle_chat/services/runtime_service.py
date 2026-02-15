@@ -11,6 +11,7 @@ from huddle_chat.constants import (
     PRESENCE_REFRESH_INTERVAL_SECONDS,
     MAX_MESSAGES,
 )
+from huddle_chat.event_helpers import emit_rebuild_search, emit_refresh_output
 
 if TYPE_CHECKING:
     from chat import ChatApp
@@ -60,8 +61,8 @@ class RuntimeService:
                                 self.app.message_events.append(event)
                                 if len(self.app.message_events) > MAX_MESSAGES:
                                     self.app.message_events.pop(0)
-                            self.app.refresh_output_from_events()
-                            self.app.rebuild_search_hits()
+                            emit_refresh_output(self.app)
+                            emit_rebuild_search(self.app)
                         self.app.last_pos_by_room[room] = f.tell()
                 except OSError as exc:
                     logger.warning(

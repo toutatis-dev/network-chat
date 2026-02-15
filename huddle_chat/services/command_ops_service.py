@@ -1,6 +1,7 @@
 import shlex
 from typing import TYPE_CHECKING, Any
 
+from huddle_chat.event_helpers import emit_system_message
 from huddle_chat.models import ChatEvent, MemoryPolicy, RoutingPolicy
 
 if TYPE_CHECKING:
@@ -55,25 +56,26 @@ class CommandOpsService:
 
     def handle_aiconfig_command(self, args: str) -> None:
         if not args.strip():
-            self.app.append_system_message(
-                f"AI config: {self.get_ai_provider_summary()}"
+            emit_system_message(
+                self.app, f"AI config: {self.get_ai_provider_summary()}"
             )
             return
 
         try:
             tokens = shlex.split(args)
         except ValueError:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="Invalid /aiconfig syntax.",
                     why="Unbalanced quotes or malformed token boundaries were detected.",
                     next_step="Run /help aiconfig, then retry your /aiconfig command.",
-                )
+                ),
             )
             return
         if not tokens:
-            self.app.append_system_message(
-                f"AI config: {self.get_ai_provider_summary()}"
+            emit_system_message(
+                self.app, f"AI config: {self.get_ai_provider_summary()}"
             )
             return
 
@@ -88,9 +90,7 @@ class CommandOpsService:
             provider = tokens[1].strip().lower()
             key = tokens[2].strip()
             if provider not in ("gemini", "openai"):
-                self.app.append_system_message(
-                    "Unknown provider. Use gemini or openai."
-                )
+                emit_system_message(self.app, "Unknown provider. Use gemini or openai.")
                 return
             self.app.ai_config.setdefault("providers", {})
             provider_cfg = self.app.ai_config["providers"].setdefault(provider, {})
@@ -99,16 +99,14 @@ class CommandOpsService:
                 self.app.ai_config["providers"][provider] = provider_cfg
             provider_cfg["api_key"] = key
             self.app.save_ai_config_data()
-            self.app.append_system_message(f"Saved API key for {provider}.")
+            emit_system_message(self.app, f"Saved API key for {provider}.")
             return
 
         if action == "set-model" and len(tokens) >= 3:
             provider = tokens[1].strip().lower()
             model = tokens[2].strip()
             if provider not in ("gemini", "openai"):
-                self.app.append_system_message(
-                    "Unknown provider. Use gemini or openai."
-                )
+                emit_system_message(self.app, "Unknown provider. Use gemini or openai.")
                 return
             self.app.ai_config.setdefault("providers", {})
             provider_cfg = self.app.ai_config["providers"].setdefault(provider, {})
@@ -117,19 +115,17 @@ class CommandOpsService:
                 self.app.ai_config["providers"][provider] = provider_cfg
             provider_cfg["model"] = model
             self.app.save_ai_config_data()
-            self.app.append_system_message(f"Saved model for {provider}: {model}")
+            emit_system_message(self.app, f"Saved model for {provider}: {model}")
             return
 
         if action == "set-provider" and len(tokens) >= 2:
             provider = tokens[1].strip().lower()
             if provider not in ("gemini", "openai"):
-                self.app.append_system_message(
-                    "Unknown provider. Use gemini or openai."
-                )
+                emit_system_message(self.app, "Unknown provider. Use gemini or openai.")
                 return
             self.app.ai_config["default_provider"] = provider
             self.app.save_ai_config_data()
-            self.app.append_system_message(f"Default AI provider set to {provider}.")
+            emit_system_message(self.app, f"Default AI provider set to {provider}.")
             return
 
         if action == "streaming":
@@ -140,8 +136,8 @@ class CommandOpsService:
             if len(tokens) == 1 or (
                 len(tokens) == 2 and tokens[1].strip().lower() == "status"
             ):
-                self.app.append_system_message(
-                    f"AI config: {self.get_streaming_summary()}"
+                emit_system_message(
+                    self.app, f"AI config: {self.get_streaming_summary()}"
                 )
                 return
 
@@ -149,8 +145,8 @@ class CommandOpsService:
                 enabled = tokens[1].strip().lower() == "on"
                 streaming["enabled"] = enabled
                 self.app.save_ai_config_data()
-                self.app.append_system_message(
-                    f"Streaming set to {'on' if enabled else 'off'}."
+                emit_system_message(
+                    self.app, f"Streaming set to {'on' if enabled else 'off'}."
                 )
                 return
 
@@ -160,8 +156,8 @@ class CommandOpsService:
                 if provider in providers_set and value in {"on", "off"}:
                     provider_flags[provider] = value == "on"
                     self.app.save_ai_config_data()
-                    self.app.append_system_message(
-                        f"Streaming for {provider} set to {value}."
+                    emit_system_message(
+                        self.app, f"Streaming for {provider} set to {value}."
                     )
                     return
 
@@ -171,22 +167,24 @@ class CommandOpsService:
                 if provider in providers_set and value in {"on", "off"}:
                     provider_flags[provider] = value == "on"
                     self.app.save_ai_config_data()
-                    self.app.append_system_message(
-                        f"Streaming for {provider} set to {value}."
+                    emit_system_message(
+                        self.app, f"Streaming for {provider} set to {value}."
                     )
                     return
 
-            self.app.append_system_message(
-                "Usage: /aiconfig streaming [status|on|off|<provider> <on|off>|provider <provider> <on|off>]"
+            emit_system_message(
+                self.app,
+                "Usage: /aiconfig streaming [status|on|off|<provider> <on|off>|provider <provider> <on|off>]",
             )
             return
 
-        self.app.append_system_message(
+        emit_system_message(
+            self.app,
             self.app.help_service.format_guided_error(
                 problem="Unsupported /aiconfig command form.",
                 why="Only documented /aiconfig subcommands are accepted.",
                 next_step="Run /help aiconfig for supported forms and examples.",
-            )
+            ),
         )
 
     def parse_share_selector(self, selector: str) -> list[ChatEvent]:
@@ -209,36 +207,37 @@ class CommandOpsService:
 
     def handle_share_command(self, args: str) -> None:
         if not self.app.is_local_room():
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="/share is only available in #ai-dm.",
                     why="Share copies selected local AI-DM messages into a shared room.",
                     next_step="Run /join ai-dm, then retry /share <target-room> <id|start-end>.",
-                )
+                ),
             )
             return
         try:
             tokens = shlex.split(args)
         except ValueError:
-            self.app.append_system_message("Invalid /share syntax. Check quotes.")
+            emit_system_message(self.app, "Invalid /share syntax. Check quotes.")
             return
         if len(tokens) < 2:
-            self.app.append_system_message("Usage: /share <target-room> <id|start-end>")
+            emit_system_message(self.app, "Usage: /share <target-room> <id|start-end>")
             return
         target_room = self.app.sanitize_room_name(tokens[0])
         if self.app.is_local_room(target_room):
-            self.app.append_system_message("Cannot share into local-only room.")
+            emit_system_message(self.app, "Cannot share into local-only room.")
             return
         selector = tokens[1]
         try:
             selected_events = self.parse_share_selector(selector)
         except ValueError:
-            self.app.append_system_message(
-                "Invalid selector. Use numeric id or range like 2-4."
+            emit_system_message(
+                self.app, "Invalid selector. Use numeric id or range like 2-4."
             )
             return
         if not selected_events:
-            self.app.append_system_message("No matching messages to share.")
+            emit_system_message(self.app, "No matching messages to share.")
             return
 
         shared_count = 0
@@ -254,8 +253,8 @@ class CommandOpsService:
                 payload.model = event.model or ""
             if self.app.write_to_file(payload, room=target_room):
                 shared_count += 1
-        self.app.append_system_message(
-            f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
+        emit_system_message(
+            self.app, f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."
         )
 
     def _parse_scopes(self, raw: str) -> list[str]:
@@ -269,27 +268,29 @@ class CommandOpsService:
     def handle_agent_command(self, args: str) -> None:
         trimmed = args.strip()
         if not trimmed or trimmed.lower() in {"status", "help"}:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 "Agent commands: /agent status, /agent list, /agent use <id>, "
                 "/agent show [id], /agent memory <private,repo,team>, "
-                "/agent route <task> <provider> <model>"
+                "/agent route <task> <provider> <model>",
             )
-            self.app.append_system_message(self.app.agent_service.build_status_text())
+            emit_system_message(self.app, self.app.agent_service.build_status_text())
             return
 
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="Invalid /agent syntax.",
                     why="Unbalanced quotes or malformed token boundaries were detected.",
                     next_step="Run /help agent, then retry the command.",
-                )
+                ),
             )
             return
         if not tokens:
-            self.app.append_system_message("Usage: /agent status")
+            emit_system_message(self.app, "Usage: /agent status")
             return
 
         action = tokens[0].strip().lower()
@@ -297,7 +298,7 @@ class CommandOpsService:
             profiles = self.app.agent_service.list_profiles()
             active_id = self.app.agent_service.get_active_profile_id()
             if not profiles:
-                self.app.append_system_message("No agent profiles found.")
+                emit_system_message(self.app, "No agent profiles found.")
                 return
             lines = ["Agent profiles:"]
             for profile in profiles:
@@ -307,15 +308,15 @@ class CommandOpsService:
                 lines.append(
                     f"{marker} {profile_id} ({name or 'unnamed'}) v{profile.version or 1}"
                 )
-            self.app.append_system_message("\n".join(lines))
+            emit_system_message(self.app, "\n".join(lines))
             return
 
         if action == "use":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /agent use <profile-id>")
+                emit_system_message(self.app, "Usage: /agent use <profile-id>")
                 return
             ok, msg = self.app.agent_service.set_active_profile(tokens[1])
-            self.app.append_system_message(msg)
+            emit_system_message(self.app, msg)
             return
 
         if action == "show":
@@ -326,58 +327,56 @@ class CommandOpsService:
             )
             profile_data = self.app.agent_service.get_profile(profile_id)
             if profile_data is None:
-                self.app.append_system_message(
-                    f"Unknown agent profile '{self.app.sanitize_agent_id(profile_id)}'."
+                emit_system_message(
+                    self.app,
+                    f"Unknown agent profile '{self.app.sanitize_agent_id(profile_id)}'.",
                 )
                 return
             memory_policy = profile_data.memory_policy
             scopes = memory_policy.scopes
             routes = profile_data.routing_policy.routes
             route_count = len(routes)
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 f"Agent profile {profile_data.id}: "
                 f"name={profile_data.name}, "
                 f"memory_scopes={','.join(scopes) if scopes else 'team'}, "
-                f"routes={route_count}, version={profile_data.version or 1}"
+                f"routes={route_count}, version={profile_data.version or 1}",
             )
             return
 
         if action == "memory":
             if len(tokens) < 2:
-                self.app.append_system_message(
-                    "Usage: /agent memory <private,repo,team>"
+                emit_system_message(
+                    self.app, "Usage: /agent memory <private,repo,team>"
                 )
                 return
             scopes = self._parse_scopes(" ".join(tokens[1:]))
             if not scopes:
-                self.app.append_system_message(
-                    "Invalid scopes. Use any of: private, repo, team."
+                emit_system_message(
+                    self.app, "Invalid scopes. Use any of: private, repo, team."
                 )
                 return
             active = self.app.agent_service.get_active_profile()
             active.memory_policy = MemoryPolicy(scopes=scopes)
             ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
             if not ok:
-                self.app.append_system_message(msg)
+                emit_system_message(self.app, msg)
                 return
-            self.app.append_system_message(
-                f"Updated memory scopes: {', '.join(scopes)}"
-            )
+            emit_system_message(self.app, f"Updated memory scopes: {', '.join(scopes)}")
             return
 
         if action == "route":
             if len(tokens) < 4:
-                self.app.append_system_message(
-                    "Usage: /agent route <task-class> <provider> <model>"
+                emit_system_message(
+                    self.app, "Usage: /agent route <task-class> <provider> <model>"
                 )
                 return
             task_class = tokens[1].strip()
             provider = tokens[2].strip().lower()
             model = tokens[3].strip()
             if provider not in {"gemini", "openai"}:
-                self.app.append_system_message(
-                    "Unknown provider. Use gemini or openai."
-                )
+                emit_system_message(self.app, "Unknown provider. Use gemini or openai.")
                 return
             active = self.app.agent_service.get_active_profile()
             if not active.routing_policy:
@@ -388,19 +387,20 @@ class CommandOpsService:
             }
             ok, msg = self.app.agent_service.save_profile(active, actor=self.app.name)
             if not ok:
-                self.app.append_system_message(msg)
+                emit_system_message(self.app, msg)
                 return
-            self.app.append_system_message(
-                f"Route set: {task_class} -> {provider}:{model}"
+            emit_system_message(
+                self.app, f"Route set: {task_class} -> {provider}:{model}"
             )
             return
 
-        self.app.append_system_message(
+        emit_system_message(
+            self.app,
             self.app.help_service.format_guided_error(
                 problem=f"Unknown /agent command '{action}'.",
                 why="The subcommand is not part of the current /agent command set.",
                 next_step="Run /help agent for supported subcommands and examples.",
-            )
+            ),
         )
 
     def handle_toolpaths_command(self, args: str) -> None:
@@ -408,53 +408,56 @@ class CommandOpsService:
         if not trimmed or trimmed.lower() == "list":
             paths = self.app.get_tool_paths()
             if not paths:
-                self.app.append_system_message("Tool paths: (none)")
+                emit_system_message(self.app, "Tool paths: (none)")
                 return
-            self.app.append_system_message(
-                "Tool paths:\n" + "\n".join(f"- {path}" for path in paths)
+            emit_system_message(
+                self.app, "Tool paths:\n" + "\n".join(f"- {path}" for path in paths)
             )
             return
         try:
             tokens = shlex.split(trimmed)
         except ValueError:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="Invalid /toolpaths syntax.",
                     why="Unbalanced quotes or malformed token boundaries were detected.",
                     next_step="Run /help tools, then retry /toolpaths command.",
-                )
+                ),
             )
             return
         if not tokens:
-            self.app.append_system_message(
+            emit_system_message(
+                self.app,
                 self.app.help_service.format_guided_error(
                     problem="Missing /toolpaths subcommand.",
                     why="The command requires list/add/remove action.",
                     next_step="Run /help tools for valid /toolpaths usage.",
-                )
+                ),
             )
             return
         action = tokens[0].lower()
         if action == "add":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /toolpaths add <absolute-path>")
+                emit_system_message(self.app, "Usage: /toolpaths add <absolute-path>")
                 return
             ok, msg = self.app.add_tool_path(tokens[1])
-            self.app.append_system_message(msg)
+            emit_system_message(self.app, msg)
             return
         if action == "remove":
             if len(tokens) < 2:
-                self.app.append_system_message(
-                    "Usage: /toolpaths remove <absolute-path>"
+                emit_system_message(
+                    self.app, "Usage: /toolpaths remove <absolute-path>"
                 )
                 return
             ok, msg = self.app.remove_tool_path(tokens[1])
-            self.app.append_system_message(msg)
+            emit_system_message(self.app, msg)
             return
-        self.app.append_system_message(
+        emit_system_message(
+            self.app,
             self.app.help_service.format_guided_error(
                 problem=f"Unknown /toolpaths subcommand '{action}'.",
                 why="Only list, add, and remove are supported.",
                 next_step="Run /help tools for examples.",
-            )
+            ),
         )

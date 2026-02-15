@@ -40,6 +40,7 @@ from huddle_chat.constants import (
     THEMES,
 )
 from huddle_chat.controller import ChatController
+from huddle_chat.event_bus import EventBus
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
 from huddle_chat.repositories import (
     ActionRepository,
@@ -240,7 +241,10 @@ class ChatApp:
 
         self.save_config()
 
+        self.event_bus = EventBus(maxsize=512, publish_timeout_seconds=0.1)
         self.controller = ChatController(self)
+        self.controller.register_event_handlers(self.event_bus)
+        self.event_bus.start()
         self.view = PromptToolkitView(self, on_submit=self.controller.handle_input)
         self.output_field = self.view.output_field
         self.input_field = self.view.input_field
@@ -1391,6 +1395,8 @@ class ChatApp:
             pass
         finally:
             self.running = False
+            if hasattr(self, "event_bus"):
+                self.event_bus.stop()
             self.stop_file_watcher()
 
 

@@ -4,6 +4,8 @@ from threading import Thread
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from huddle_chat.event_helpers import emit_system_message
+
 if TYPE_CHECKING:
     from chat import ChatApp
 
@@ -91,8 +93,8 @@ class ActionService:
             return
         if self._is_action_expired(action):
             self._mark_action_expired(action_id, action)
-            self.app.append_system_message(
-                f"Action {action_id} expired before execution."
+            emit_system_message(
+                self.app, f"Action {action_id} expired before execution."
             )
             return
         if str(action.get("status")) != "approved":
@@ -106,8 +108,8 @@ class ActionService:
                 "user": self.app.name,
             }
         )
-        self.app.append_system_message(
-            f"Running action {action_id}: {action.get('summary', '')}"
+        emit_system_message(
+            self.app, f"Running action {action_id}: {action.get('summary', '')}"
         )
         result = self.app.tool_service.execute_action(action)
         meta = result.meta
@@ -137,7 +139,7 @@ class ActionService:
             f"Action {action_id} {status}. "
             f"exit={meta.get('exitCode')} duration={meta.get('durationMs')}ms"
         )
-        self.app.append_system_message(summary)
+        emit_system_message(self.app, summary)
 
     def format_pending_actions(self) -> str:
         self.ensure_pending_actions_initialized()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from huddle_chat.event_helpers import emit_system_message
+
 if TYPE_CHECKING:
     from chat import ChatApp
 
@@ -145,8 +147,9 @@ class ExplainService:
     def handle_explain_command(self, args: str) -> None:
         trimmed = args.strip()
         if not trimmed or trimmed.lower() == "help":
-            self.app.append_system_message(
-                "Explain commands: /explain action <id>, /explain agent, /explain tool <name>"
+            emit_system_message(
+                self.app,
+                "Explain commands: /explain action <id>, /explain agent, /explain tool <name>",
             )
             return
 
@@ -155,22 +158,22 @@ class ExplainService:
 
         if subject == "action":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /explain action <action-id>")
+                emit_system_message(self.app, "Usage: /explain action <action-id>")
                 return
-            self.app.append_system_message(self.explain_action(tokens[1]))
+            emit_system_message(self.app, self.explain_action(tokens[1]))
             return
 
         if subject == "agent":
-            self.app.append_system_message(self.explain_agent())
+            emit_system_message(self.app, self.explain_agent())
             return
 
         if subject == "tool":
             if len(tokens) < 2:
-                self.app.append_system_message("Usage: /explain tool <tool-name>")
+                emit_system_message(self.app, "Usage: /explain tool <tool-name>")
                 return
-            self.app.append_system_message(self.explain_tool(tokens[1]))
+            emit_system_message(self.app, self.explain_tool(tokens[1]))
             return
 
-        self.app.append_system_message(
-            f"Unknown /explain subject '{subject}'. Run /explain help."
+        emit_system_message(
+            self.app, f"Unknown /explain subject '{subject}'. Run /explain help."
         )
