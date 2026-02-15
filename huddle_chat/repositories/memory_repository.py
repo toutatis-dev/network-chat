@@ -115,3 +115,9 @@ class MemoryRepository:
             )
             chat.time.sleep(delay + random.uniform(0, 0.03))
         return False
+
+    def has_any_entries(self, scopes: list[str]) -> bool:
+        for row in self.load_entries_for_scopes(scopes):
+            if row:
+                return True
+        return False

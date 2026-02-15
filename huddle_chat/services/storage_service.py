@@ -85,11 +85,8 @@ class StorageService:
             return decoded[-max_lines:]
 
     def load_recent_messages(self) -> None:
-        repo = getattr(self.app, "message_repository", None)
-        message_file = (
-            repo.get_message_file(self.app.current_room)
-            if repo is not None
-            else self.app.get_message_file()
+        message_file = self.app.message_repository.get_message_file(
+            self.app.current_room
         )
         if not message_file.exists():
             self.app.output_field.text = ""
@@ -124,10 +121,9 @@ class StorageService:
 
         assert chat.portalocker is not None
 
-        message_file = self.app.get_message_file(room)
-        repo = getattr(self.app, "message_repository", None)
-        if repo is not None:
-            message_file = repo.get_message_file(room or self.app.current_room)
+        message_file = self.app.message_repository.get_message_file(
+            room or self.app.current_room
+        )
         max_attempts = int(getattr(chat, "LOCK_MAX_ATTEMPTS", LOCK_MAX_ATTEMPTS))
         for attempt in range(max_attempts):
             try:

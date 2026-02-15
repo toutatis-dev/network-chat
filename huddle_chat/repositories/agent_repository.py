@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -48,3 +49,34 @@ class AgentRepository:
 
     def append_agent_audit_row(self, row: dict[str, Any]) -> bool:
         return self.app.append_jsonl_row(self.get_agent_audit_file(), row)
+
+    def list_profile_dicts(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for path in sorted(self.get_agent_profiles_dir().glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                rows.append(data)
+        return rows
+
+    def load_profile(self, profile_id: str) -> dict[str, Any] | None:
+        path = self.get_agent_profile_path(profile_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+
+    def save_profile_dict(self, profile_id: str, payload: dict[str, Any]) -> bool:
+        path = self.get_agent_profile_path(profile_id)
+        try:
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return True
+        except OSError:
+            return False

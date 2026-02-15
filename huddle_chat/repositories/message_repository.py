@@ -53,3 +53,20 @@ class MessageRepository:
         if self.app.current_room not in rooms:
             rooms.append(self.app.current_room)
         return sorted(set(rooms))
+
+    def read_lines(self, path: Path) -> list[str]:
+        if not path.exists():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.readlines()
+        except OSError:
+            return []
+
+    def tail_lines(self, path: Path, limit: int = 300) -> list[str]:
+        if limit <= 0:
+            return []
+        lines = self.read_lines(path)
+        if not lines:
+            return []
+        return lines[-limit:]

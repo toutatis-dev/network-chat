@@ -104,21 +104,12 @@ class HelpService:
         return state
 
     def load_onboarding_state(self) -> dict[str, Any]:
-        path = self.app.get_onboarding_state_path()
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return self._normalize_onboarding_state(json.load(f))
-        except (OSError, json.JSONDecodeError):
-            return self._onboarding_default_state()
+        repo = self.app.config_repository
+        payload = repo.load_onboarding_state()
+        return self._normalize_onboarding_state(payload)
 
     def save_onboarding_state(self, state: dict[str, Any]) -> None:
-        path = self.app.get_onboarding_state_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-        except OSError:
-            return
+        self.app.config_repository.save_onboarding_state(state)
 
     def _has_provider_configuration(self) -> bool:
         ai_config = getattr(self.app, "ai_config", {})
@@ -141,11 +132,7 @@ class HelpService:
         if not path.exists():
             return []
         event_types: list[str] = []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()[-limit:]
-        except OSError:
-            return []
+        lines = self.app.message_repository.tail_lines(path, limit)
         for line in lines:
             try:
                 row = json.loads(line)
@@ -171,72 +158,28 @@ class HelpService:
     def _has_action_review_or_decision(self) -> bool:
         if getattr(self.app, "pending_actions", {}):
             return True
-        action_repo = getattr(self.app, "action_repository", None)
-        path = (
-            action_repo.get_actions_audit_file()
-            if action_repo is not None
-            else self.app.get_actions_audit_file()
-        )
-        if not path.exists():
-            return False
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    if "action_id" not in row:
-                        continue
-                    status = str(row.get("status", "")).strip().lower()
-                    decision = str(row.get("decision", "")).strip().lower()
-                    if status in {
-                        "pending",
-                        "approved",
-                        "running",
-                        "completed",
-                        "failed",
-                        "expired",
-                        "denied",
-                    }:
-                        return True
-                    if decision in {"approved", "denied"}:
-                        return True
-        except OSError:
-            return False
+        rows = self.app.action_repository.load_audit_rows()
+        for row in rows:
+            if "action_id" not in row:
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            decision = str(row.get("decision", "")).strip().lower()
+            if status in {
+                "pending",
+                "approved",
+                "running",
+                "completed",
+                "failed",
+                "expired",
+                "denied",
+            }:
+                return True
+            if decision in {"approved", "denied"}:
+                return True
         return False
 
     def _has_saved_memory(self) -> bool:
-        memory_repo = getattr(self.app, "memory_repository", None)
-        if memory_repo is not None:
-            paths = (
-                memory_repo.get_memory_file(),
-                memory_repo.get_private_memory_file(),
-                memory_repo.get_repo_memory_file(),
-            )
-        else:
-            paths = (
-                self.app.get_memory_file(),
-                self.app.get_private_memory_file(),
-                self.app.get_repo_memory_file(),
-            )
-
-        for path in paths:
-            if not path.exists():
-                continue
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip():
-                            return True
-            except OSError:
-                continue
-        return False
+        return self.app.memory_repository.has_any_entries(["private", "repo", "team"])
 
     def evaluate_onboarding_steps(self) -> dict[str, bool]:
         return {

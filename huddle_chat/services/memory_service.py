@@ -58,42 +58,13 @@ class MemoryService:
         return normalized or ["team"]
 
     def get_memory_file_for_scope(self, scope: str):
-        repo = getattr(self.app, "memory_repository", None)
-        if repo is not None:
-            return repo.get_memory_file_for_scope(scope)
-        if scope == "private":
-            return self.app.get_private_memory_file()
-        if scope == "repo":
-            return self.app.get_repo_memory_file()
-        return self.app.get_memory_file()
+        return self.app.memory_repository.get_memory_file_for_scope(scope)
 
     def load_memory_entries(
         self, scopes: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        self.app.ensure_memory_paths()
         normalized_scopes = self.normalize_memory_scopes(scopes)
-        repo = getattr(self.app, "memory_repository", None)
-        if repo is not None:
-            return repo.load_entries_for_scopes(normalized_scopes)
-        entries: list[dict[str, Any]] = []
-        for scope in normalized_scopes:
-            path = self.get_memory_file_for_scope(scope)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(data, dict):
-                            data.setdefault("scope", scope)
-                            entries.append(data)
-            except OSError as exc:
-                logger.warning("Failed reading memory entries from %s: %s", path, exc)
-        return entries
+        return self.app.memory_repository.load_entries_for_scopes(normalized_scopes)
 
     def normalize_text_tokens(self, text: str) -> set[str]:
         return {
@@ -372,20 +343,7 @@ class MemoryService:
     def write_memory_entry(self, entry: dict[str, Any], scope: str = "team") -> bool:
         normalized_scope = self.normalize_memory_scopes([scope])[0]
         entry.setdefault("scope", normalized_scope)
-        repo = getattr(self.app, "memory_repository", None)
-        if repo is not None:
-            return repo.append_entry(entry, normalized_scope)
-
-        self.app.ensure_locking_dependency()
-        self.app.ensure_memory_paths()
-        memory_file = self.get_memory_file_for_scope(normalized_scope)
-        row = json.dumps(entry, ensure_ascii=True)
-        try:
-            with open(memory_file, "a", encoding="utf-8") as f:
-                f.write(row + "\n")
-            return True
-        except OSError:
-            return False
+        return self.app.memory_repository.append_entry(entry, normalized_scope)
 
     def get_last_ai_response_event(self) -> ChatEvent | None:
         for event in reversed(self.app.message_events):

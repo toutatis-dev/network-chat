@@ -81,3 +81,24 @@ class ConfigRepository:
 
     def get_onboarding_state_path(self) -> Path:
         return Path(ONBOARDING_STATE_FILE)
+
+    def load_onboarding_state(self) -> dict[str, Any] | None:
+        path = self.get_onboarding_state_path()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+
+    def save_onboarding_state(self, payload: dict[str, Any]) -> bool:
+        path = self.get_onboarding_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            return True
+        except OSError:
+            return False

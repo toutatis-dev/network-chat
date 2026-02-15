@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -48,35 +47,18 @@ class AgentService:
         )
 
     def ensure_default_profile(self) -> None:
-        repo = getattr(self.app, "agent_repository", None)
-        if repo is not None:
-            repo.ensure_agent_paths()
-            profile_path = repo.get_agent_profile_path(DEFAULT_AGENT_PROFILE_ID)
-        else:
-            self.app.ensure_agent_paths()
-            profile_path = self.app.get_agent_profile_path(DEFAULT_AGENT_PROFILE_ID)
-        if profile_path.exists():
+        repo = self.app.agent_repository
+        repo.ensure_agent_paths()
+        if repo.load_profile(DEFAULT_AGENT_PROFILE_ID) is not None:
             return
         default = self.get_default_profile()
-        profile_path.write_text(
-            json.dumps(default.to_dict(), indent=2), encoding="utf-8"
-        )
+        repo.save_profile_dict(DEFAULT_AGENT_PROFILE_ID, default.to_dict())
         self.append_agent_audit("create", default.id, "system")
 
     def list_profiles(self) -> list[AgentProfile]:
         self.ensure_default_profile()
         profiles: list[AgentProfile] = []
-        repo = getattr(self.app, "agent_repository", None)
-        profiles_dir = (
-            repo.get_agent_profiles_dir()
-            if repo is not None
-            else self.app.get_agent_profiles_dir()
-        )
-        for path in sorted(profiles_dir.glob("*.json")):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+        for data in self.app.agent_repository.list_profile_dicts():
             if isinstance(data, dict) and str(data.get("id", "")).strip():
                 try:
                     profiles.append(AgentProfile(**data))
@@ -86,17 +68,8 @@ class AgentService:
 
     def get_profile(self, profile_id: str) -> AgentProfile | None:
         safe_id = self.app.sanitize_agent_id(profile_id)
-        repo = getattr(self.app, "agent_repository", None)
-        path = (
-            repo.get_agent_profile_path(safe_id)
-            if repo is not None
-            else self.app.get_agent_profile_path(safe_id)
-        )
-        if not path.exists():
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        data = self.app.agent_repository.load_profile(safe_id)
+        if data is None:
             return None
         if isinstance(data, dict):
             try:
@@ -135,11 +108,7 @@ class AgentService:
             "profile_id": profile_id,
             "actor": actor,
         }
-        repo = getattr(self.app, "agent_repository", None)
-        if repo is not None:
-            repo.append_agent_audit_row(row)
-        else:
-            self.app.append_jsonl_row(self.app.get_agent_audit_file(), row)
+        self.app.agent_repository.append_agent_audit_row(row)
 
     def upsert_profile(
         self,
@@ -171,16 +140,8 @@ class AgentService:
             version=version,
         )
 
-        repo = getattr(self.app, "agent_repository", None)
-        path = (
-            repo.get_agent_profile_path(safe_id)
-            if repo is not None
-            else self.app.get_agent_profile_path(safe_id)
-        )
-        try:
-            path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
-        except OSError as exc:
-            return False, f"Failed to save profile: {exc}"
+        if not self.app.agent_repository.save_profile_dict(safe_id, profile.to_dict()):
+            return False, "Failed to save profile."
         self.append_agent_audit("upsert", safe_id, actor)
         return True, f"Saved profile '{safe_id}' (v{version})."
 
@@ -201,16 +162,10 @@ class AgentService:
         if not profile.created_by:
             profile.created_by = existing.created_by if existing else actor
 
-        repo = getattr(self.app, "agent_repository", None)
-        path = (
-            repo.get_agent_profile_path(profile_id)
-            if repo is not None
-            else self.app.get_agent_profile_path(profile_id)
-        )
-        try:
-            path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
-        except OSError as exc:
-            return False, f"Failed to save profile: {exc}"
+        if not self.app.agent_repository.save_profile_dict(
+            profile_id, profile.to_dict()
+        ):
+            return False, "Failed to save profile."
         self.append_agent_audit("save", profile_id, actor)
         return True, f"Saved profile '{profile_id}' (v{version})."
 

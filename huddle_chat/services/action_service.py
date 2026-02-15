@@ -21,7 +21,7 @@ class ActionService:
     def _append_audit_row(self, row: dict[str, Any]) -> bool:
         repo = getattr(self.app, "action_repository", None)
         if repo is not None:
-            return repo.append_action_audit_row(row)
+            return repo.append_row(row)
         return self.app.append_jsonl_row(self.app.get_actions_audit_file(), row)
 
     def create_pending_action(
@@ -195,50 +195,50 @@ class ActionService:
     def load_actions_from_audit(self) -> None:
         self.ensure_pending_actions_initialized()
         repo = getattr(self.app, "action_repository", None)
-        path = (
-            repo.get_actions_audit_file()
-            if repo is not None
-            else self.app.get_actions_audit_file()
-        )
-        if not path.exists():
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    action_id = str(row.get("action_id", "")).strip()
-                    if not action_id:
-                        continue
-                    status = str(row.get("status", "")).strip()
-                    if status == "pending":
-                        self.app.pending_actions[action_id] = row
-                        if self._is_action_expired(row):
-                            self._mark_action_expired(action_id, row)
-                        continue
-                    if status in {"approved", "running", "completed", "failed"}:
-                        if action_id in self.app.pending_actions:
-                            self.app.pending_actions[action_id]["status"] = status
-                            if "result" in row:
-                                self.app.pending_actions[action_id]["result"] = row[
-                                    "result"
-                                ]
-                        continue
-                    decision = str(row.get("decision", "")).strip()
-                    if (
-                        decision in {"approved", "denied"}
-                        and action_id in self.app.pending_actions
-                    ):
-                        self.app.pending_actions[action_id]["status"] = decision
-        except OSError:
-            return
+        if repo is not None:
+            rows = repo.load_audit_rows()
+        else:
+            path = self.app.get_actions_audit_file()
+            if not path.exists():
+                return
+            rows = []
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(row, dict):
+                            rows.append(row)
+            except OSError:
+                return
+
+        for row in rows:
+            action_id = str(row.get("action_id", "")).strip()
+            if not action_id:
+                continue
+            status = str(row.get("status", "")).strip()
+            if status == "pending":
+                self.app.pending_actions[action_id] = row
+                if self._is_action_expired(row):
+                    self._mark_action_expired(action_id, row)
+                continue
+            if status in {"approved", "running", "completed", "failed"}:
+                if action_id in self.app.pending_actions:
+                    self.app.pending_actions[action_id]["status"] = status
+                    if "result" in row:
+                        self.app.pending_actions[action_id]["result"] = row["result"]
+                continue
+            decision = str(row.get("decision", "")).strip()
+            if (
+                decision in {"approved", "denied"}
+                and action_id in self.app.pending_actions
+            ):
+                self.app.pending_actions[action_id]["status"] = decision
 
     def _is_action_expired(self, action: dict[str, Any]) -> bool:
         expires_at = str(action.get("expires_at", "")).strip()
