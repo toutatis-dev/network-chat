@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import time
+from threading import Event
+from typing import cast
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
+from huddle_chat.constants import MAX_MESSAGES, PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS
+from huddle_chat.models import ChatEvent
 from huddle_chat.commands.registry import CommandRegistry
 
 if TYPE_CHECKING:
@@ -62,3 +68,233 @@ class ChatController:
             self.app.append_system_message(
                 "Error: Could not send message. Network busy or locked."
             )
+
+    def rebuild_search_hits(self) -> None:
+        self.app.search_hits = []
+        self.app.active_search_hit_idx = -1
+        if not self.app.search_query:
+            return
+
+        pattern = self.app.search_query.lower()
+        for idx, line in enumerate(self.app.messages):
+            if pattern in line.lower():
+                self.app.search_hits.append(idx)
+
+        if self.app.search_hits:
+            self.app.active_search_hit_idx = 0
+            self.jump_to_search_hit(0)
+
+    def jump_to_search_hit(self, direction: int) -> bool:
+        if not self.app.search_hits:
+            return False
+
+        if direction != 0:
+            self.app.active_search_hit_idx = (
+                self.app.active_search_hit_idx + direction
+            ) % len(self.app.search_hits)
+
+        target_line = self.app.search_hits[self.app.active_search_hit_idx]
+        cursor = 0
+        for idx, line in enumerate(self.app.messages):
+            if idx == target_line:
+                break
+            cursor += len(line) + 1
+        self.app.output_field.buffer.cursor_position = cursor
+        self.app.application.invalidate()
+        return True
+
+    def render_event_for_display(self, event: ChatEvent, index: int) -> str:
+        rendered = self.app.render_event(event)
+        if self.app.is_local_room():
+            return f"({index}) {rendered}"
+        return rendered
+
+    def get_ai_preview_line(self) -> str:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if not self.app.ai_active_request_id:
+                return ""
+            if self.app.ai_active_room != self.app.current_room:
+                return ""
+            elapsed = int(max(0, time.monotonic() - self.app.ai_active_started_at))
+            provider = self.app.ai_active_provider or "ai"
+            model = self.app.ai_active_model
+            model_suffix = f":{model}" if model else ""
+            base = f"[AI pending {provider}{model_suffix} {elapsed}s]"
+            if self.app.ai_preview_text:
+                return f"{base} {self.app.ai_preview_text}"
+            return base
+
+    def refresh_output_from_events(self) -> None:
+        self.app.messages = [
+            self.render_event_for_display(event, idx + 1)
+            for idx, event in enumerate(self.app.message_events)
+        ]
+        preview_line = self.get_ai_preview_line()
+        if preview_line:
+            self.app.messages.append(preview_line)
+        if len(self.app.messages) > MAX_MESSAGES:
+            overflow = len(self.app.messages) - MAX_MESSAGES
+            self.app.messages = self.app.messages[overflow:]
+            self.app.message_events = self.app.message_events[overflow:]
+        self.app.output_field.text = "\n".join(self.app.messages)
+        self.app.output_field.buffer.cursor_position = len(self.app.output_field.text)
+        self.app.application.invalidate()
+
+    def update_sidebar(self) -> None:
+        room_label = f"Room: #{self.app.current_room}"
+        if self.app.is_local_room():
+            room_label += " (local)"
+        fragments: list[tuple[str, str]] = [
+            ("fg:#aaaaaa", room_label),
+            ("", "\n"),
+            ("", "\n"),
+        ]
+        users = sorted(
+            self.app.online_users.values(),
+            key=lambda data: (
+                str(data.get("name", "Anonymous")).lower(),
+                str(data.get("client_id", "")),
+            ),
+        )
+        name_counts: dict[str, int] = {}
+        for data in users:
+            name = self.app.sanitize_sidebar_text(data.get("name", "Anonymous"), 64)
+            name_counts[name] = name_counts.get(name, 0) + 1
+
+        for idx, data in enumerate(users):
+            color = self.app.sanitize_sidebar_color(data.get("color", "white"))
+            display_name = self.app.sanitize_sidebar_text(
+                data.get("name", "Anonymous"), 64
+            )
+            client_id = self.app.sanitize_sidebar_text(data.get("client_id", ""), 12)
+            if name_counts.get(display_name, 0) > 1 and client_id:
+                display_name = f"{display_name} ({client_id[:4]})"
+            status = self.app.sanitize_sidebar_text(data.get("status", ""), 80)
+            user_room = self.app.sanitize_sidebar_text(data.get("room", ""), 32)
+            fragments.append((f"fg:{color}", f"* {display_name}"))
+            if status:
+                fragments.append(("fg:#888888", f" [{status}]"))
+            if user_room:
+                fragments.append(("fg:#888888", f" #{user_room}"))
+            if idx < len(users) - 1:
+                fragments.append(("", "\n"))
+        self.app.sidebar_control.text = cast(Any, fragments)
+        self.app.application.invalidate()
+
+    def refresh_presence_sidebar(self, force: bool = False) -> None:
+        self.app.ensure_presence_health_initialized()
+        now = time.monotonic()
+        if not force:
+            since_last = now - self.app._last_presence_sidebar_refresh_at
+            if since_last < PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS:
+                return
+        self.app._last_presence_sidebar_refresh_at = now
+        self.app.online_users = self.app.get_online_users_all_rooms()
+        self.update_sidebar()
+
+    def switch_room(self, target_room: str) -> None:
+        room = self.app.sanitize_room_name(target_room)
+        if room == self.app.current_room:
+            self.app.append_system_message(f"Already in #{room}.")
+            return
+
+        self.app.current_room = room
+        self.app.update_room_paths()
+        self.app.ensure_paths()
+        self.app.search_query = ""
+        self.app.search_hits = []
+        self.app.active_search_hit_idx = -1
+        self.app.messages = []
+        self.app.message_events = []
+        self.app.load_recent_messages()
+        self.refresh_presence_sidebar()
+        self.app.save_config()
+        self.app.signal_monitor_refresh()
+        self.app.append_system_message(f"Joined room #{room}.")
+
+    def start_ai_request_state(
+        self, provider: str, model: str, target_room: str, scope: str
+    ) -> str | None:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id is not None:
+                return None
+            request_id = uuid4().hex[:10]
+            self.app.ai_active_request_id = request_id
+            self.app.ai_active_started_at = time.monotonic()
+            self.app.ai_active_provider = provider
+            self.app.ai_active_model = model
+            self.app.ai_active_scope = scope
+            self.app.ai_active_room = target_room
+            self.app.ai_retry_count = 0
+            self.app.ai_preview_text = "connecting..."
+            self.app.ai_cancel_event = Event()
+            return request_id
+
+    def clear_ai_request_state(self, request_id: str) -> None:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id != request_id:
+                return
+            self.app.ai_active_request_id = None
+            self.app.ai_active_started_at = 0.0
+            self.app.ai_active_provider = ""
+            self.app.ai_active_model = ""
+            self.app.ai_active_scope = ""
+            self.app.ai_active_room = ""
+            self.app.ai_retry_count = 0
+            self.app.ai_preview_text = ""
+            self.app.ai_cancel_event = Event()
+
+    def is_ai_request_active(self) -> bool:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            return self.app.ai_active_request_id is not None
+
+    def set_ai_preview_text(self, request_id: str, text: str) -> None:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id != request_id:
+                return
+            self.app.ai_preview_text = text[:180]
+        self.refresh_output_from_events()
+
+    def is_ai_request_cancelled(self, request_id: str) -> bool:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id != request_id:
+                return True
+            return self.app.ai_cancel_event.is_set()
+
+    def request_ai_cancel(self) -> bool:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id is None:
+                return False
+            self.app.ai_cancel_event.set()
+            self.app.ai_preview_text = "cancellation requested..."
+            return True
+
+    def build_ai_status_text(self) -> str:
+        self.app.ensure_ai_state_initialized()
+        with self.app.ai_state_lock:
+            if self.app.ai_active_request_id is None:
+                return "No active AI request."
+            elapsed = int(max(0, time.monotonic() - self.app.ai_active_started_at))
+            return (
+                f"AI status: request={self.app.ai_active_request_id}, "
+                f"provider={self.app.ai_active_provider}, model={self.app.ai_active_model}, "
+                f"scope={self.app.ai_active_scope}, room=#{self.app.ai_active_room}, "
+                f"elapsed={elapsed}s, retry={self.app.ai_retry_count}, "
+                f"cancelled={self.app.ai_cancel_event.is_set()}"
+            )
+
+    def run_ai_preview_pulse(self, request_id: str) -> None:
+        self.app.ensure_ai_state_initialized()
+        while True:
+            with self.app.ai_state_lock:
+                if self.app.ai_active_request_id != request_id:
+                    return
+            self.refresh_output_from_events()
+            time.sleep(0.5)

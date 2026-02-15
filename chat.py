@@ -6,7 +6,7 @@ import string
 import re
 import logging
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 from datetime import datetime
 from threading import Event, Lock, Thread
 from pathlib import Path
@@ -38,7 +38,6 @@ from huddle_chat.constants import (
     PRESENCE_MALFORMED_QUARANTINE_THRESHOLD,
     PRESENCE_QUARANTINE_DIR_NAME,
     THEMES,
-    PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS,
 )
 from huddle_chat.controller import ChatController
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
@@ -773,54 +772,14 @@ class ChatApp:
                 )
 
     def update_sidebar(self) -> None:
-        room_label = f"Room: #{self.current_room}"
-        if self.is_local_room():
-            room_label += " (local)"
-        fragments: list[tuple[str, str]] = [
-            ("fg:#aaaaaa", room_label),
-            ("", "\n"),
-            ("", "\n"),
-        ]
-        users = sorted(
-            self.online_users.values(),
-            key=lambda data: (
-                str(data.get("name", "Anonymous")).lower(),
-                str(data.get("client_id", "")),
-            ),
-        )
-        name_counts: dict[str, int] = {}
-        for data in users:
-            name = self.sanitize_sidebar_text(data.get("name", "Anonymous"), 64)
-            name_counts[name] = name_counts.get(name, 0) + 1
-
-        for idx, data in enumerate(users):
-            color = self.sanitize_sidebar_color(data.get("color", "white"))
-            display_name = self.sanitize_sidebar_text(data.get("name", "Anonymous"), 64)
-            client_id = self.sanitize_sidebar_text(data.get("client_id", ""), 12)
-            if name_counts.get(display_name, 0) > 1 and client_id:
-                display_name = f"{display_name} ({client_id[:4]})"
-            status = self.sanitize_sidebar_text(data.get("status", ""), 80)
-            user_room = self.sanitize_sidebar_text(data.get("room", ""), 32)
-            fragments.append((f"fg:{color}", f"* {display_name}"))
-            if status:
-                fragments.append(("fg:#888888", f" [{status}]"))
-            if user_room:
-                fragments.append(("fg:#888888", f" #{user_room}"))
-            if idx < len(users) - 1:
-                fragments.append(("", "\n"))
-        self.sidebar_control.text = cast(Any, fragments)
-        self.application.invalidate()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.update_sidebar()
 
     def refresh_presence_sidebar(self, force: bool = False) -> None:
-        self.ensure_presence_health_initialized()
-        now = time.monotonic()
-        if not force:
-            since_last = now - self._last_presence_sidebar_refresh_at
-            if since_last < PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS:
-                return
-        self._last_presence_sidebar_refresh_at = now
-        self.online_users = self.get_online_users_all_rooms()
-        self.update_sidebar()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.refresh_presence_sidebar(force=force)
 
     def sanitize_sidebar_text(self, value: Any, max_len: int) -> str:
         text = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
@@ -966,76 +925,29 @@ class ChatApp:
         self.append_local_event(self.build_event("system", text))
 
     def rebuild_search_hits(self) -> None:
-        self.search_hits = []
-        self.active_search_hit_idx = -1
-        if not self.search_query:
-            return
-
-        pattern = self.search_query.lower()
-        for idx, line in enumerate(self.messages):
-            if pattern in line.lower():
-                self.search_hits.append(idx)
-
-        if self.search_hits:
-            self.active_search_hit_idx = 0
-            self.jump_to_search_hit(0)
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.rebuild_search_hits()
 
     def jump_to_search_hit(self, direction: int) -> bool:
-        if not self.search_hits:
-            return False
-
-        if direction != 0:
-            self.active_search_hit_idx = (self.active_search_hit_idx + direction) % len(
-                self.search_hits
-            )
-
-        target_line = self.search_hits[self.active_search_hit_idx]
-        cursor = 0
-        for idx, line in enumerate(self.messages):
-            if idx == target_line:
-                break
-            cursor += len(line) + 1
-        self.output_field.buffer.cursor_position = cursor
-        self.application.invalidate()
-        return True
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.jump_to_search_hit(direction)
 
     def render_event_for_display(self, event: ChatEvent, index: int) -> str:
-        rendered = self.render_event(event)
-        if self.is_local_room():
-            return f"({index}) {rendered}"
-        return rendered
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.render_event_for_display(event, index)
 
     def refresh_output_from_events(self) -> None:
-        self.messages = [
-            self.render_event_for_display(event, idx + 1)
-            for idx, event in enumerate(self.message_events)
-        ]
-        preview_line = self.get_ai_preview_line()
-        if preview_line:
-            self.messages.append(preview_line)
-        if len(self.messages) > MAX_MESSAGES:
-            overflow = len(self.messages) - MAX_MESSAGES
-            self.messages = self.messages[overflow:]
-            self.message_events = self.message_events[overflow:]
-        self.output_field.text = "\n".join(self.messages)
-        self.output_field.buffer.cursor_position = len(self.output_field.text)
-        self.application.invalidate()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.refresh_output_from_events()
 
     def get_ai_preview_line(self) -> str:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if not self.ai_active_request_id:
-                return ""
-            if self.ai_active_room != self.current_room:
-                return ""
-            elapsed = int(max(0, time.monotonic() - self.ai_active_started_at))
-            provider = self.ai_active_provider or "ai"
-            model = self.ai_active_model
-            model_suffix = f":{model}" if model else ""
-            base = f"[AI pending {provider}{model_suffix} {elapsed}s]"
-            if self.ai_preview_text:
-                return f"{base} {self.ai_preview_text}"
-            return base
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.get_ai_preview_line()
 
     def ensure_ai_state_initialized(self) -> None:
         if not hasattr(self, "ai_state_lock"):
@@ -1179,24 +1091,9 @@ class ChatApp:
         return self.apply_search_highlight([("", line_text)], self.search_query)
 
     def switch_room(self, target_room: str) -> None:
-        room = self.sanitize_room_name(target_room)
-        if room == self.current_room:
-            self.append_system_message(f"Already in #{room}.")
-            return
-
-        self.current_room = room
-        self.update_room_paths()
-        self.ensure_paths()
-        self.search_query = ""
-        self.search_hits = []
-        self.active_search_hit_idx = -1
-        self.messages = []
-        self.message_events = []
-        self.load_recent_messages()
-        self.refresh_presence_sidebar()
-        self.save_config()
-        self.signal_monitor_refresh()
-        self.append_system_message(f"Joined room #{room}.")
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.switch_room(target_room)
 
     def load_recent_messages(self) -> None:
         self.ensure_services_initialized()
@@ -1463,88 +1360,46 @@ class ChatApp:
     def start_ai_request_state(
         self, provider: str, model: str, target_room: str, scope: str
     ) -> str | None:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id is not None:
-                return None
-            request_id = uuid4().hex[:10]
-            self.ai_active_request_id = request_id
-            self.ai_active_started_at = time.monotonic()
-            self.ai_active_provider = provider
-            self.ai_active_model = model
-            self.ai_active_scope = scope
-            self.ai_active_room = target_room
-            self.ai_retry_count = 0
-            self.ai_preview_text = "connecting..."
-            self.ai_cancel_event = Event()
-            return request_id
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.start_ai_request_state(
+            provider, model, target_room, scope
+        )
 
     def clear_ai_request_state(self, request_id: str) -> None:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id != request_id:
-                return
-            self.ai_active_request_id = None
-            self.ai_active_started_at = 0.0
-            self.ai_active_provider = ""
-            self.ai_active_model = ""
-            self.ai_active_scope = ""
-            self.ai_active_room = ""
-            self.ai_retry_count = 0
-            self.ai_preview_text = ""
-            self.ai_cancel_event = Event()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.clear_ai_request_state(request_id)
 
     def is_ai_request_active(self) -> bool:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            return self.ai_active_request_id is not None
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.is_ai_request_active()
 
     def set_ai_preview_text(self, request_id: str, text: str) -> None:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id != request_id:
-                return
-            self.ai_preview_text = text[:180]
-        self.refresh_output_from_events()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.set_ai_preview_text(request_id, text)
 
     def is_ai_request_cancelled(self, request_id: str) -> bool:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id != request_id:
-                return True
-            return self.ai_cancel_event.is_set()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.is_ai_request_cancelled(request_id)
 
     def request_ai_cancel(self) -> bool:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id is None:
-                return False
-            self.ai_cancel_event.set()
-            self.ai_preview_text = "cancellation requested..."
-            return True
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.request_ai_cancel()
 
     def build_ai_status_text(self) -> str:
-        self.ensure_ai_state_initialized()
-        with self.ai_state_lock:
-            if self.ai_active_request_id is None:
-                return "No active AI request."
-            elapsed = int(max(0, time.monotonic() - self.ai_active_started_at))
-            return (
-                f"AI status: request={self.ai_active_request_id}, "
-                f"provider={self.ai_active_provider}, model={self.ai_active_model}, "
-                f"scope={self.ai_active_scope}, room=#{self.ai_active_room}, "
-                f"elapsed={elapsed}s, retry={self.ai_retry_count}, "
-                f"cancelled={self.ai_cancel_event.is_set()}"
-            )
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.build_ai_status_text()
 
     def run_ai_preview_pulse(self, request_id: str) -> None:
-        self.ensure_ai_state_initialized()
-        while True:
-            with self.ai_state_lock:
-                if self.ai_active_request_id != request_id:
-                    return
-            self.refresh_output_from_events()
-            time.sleep(0.5)
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.run_ai_preview_pulse(request_id)
 
     def run_ai_request_with_retry(
         self,
