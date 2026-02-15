@@ -18,6 +18,12 @@ class ActionService:
         if not hasattr(self.app, "pending_actions"):
             self.app.pending_actions = {}
 
+    def _append_audit_row(self, row: dict[str, Any]) -> bool:
+        repo = getattr(self.app, "action_repository", None)
+        if repo is not None:
+            return repo.append_action_audit_row(row)
+        return self.app.append_jsonl_row(self.app.get_actions_audit_file(), row)
+
     def create_pending_action(
         self,
         *,
@@ -51,7 +57,7 @@ class ActionService:
             "expires_at": expires_at,
         }
         self.app.pending_actions[action_id] = row
-        self.app.append_jsonl_row(self.app.get_actions_audit_file(), row)
+        self._append_audit_row(row)
         return action_id
 
     def decide_action(self, action_id: str, decision: str) -> tuple[bool, str]:
@@ -73,7 +79,7 @@ class ActionService:
             "user": self.app.name,
             "decision": decision,
         }
-        self.app.append_jsonl_row(self.app.get_actions_audit_file(), row)
+        self._append_audit_row(row)
         if decision == "approved":
             Thread(target=self.execute_action, args=(action_id,), daemon=True).start()
         return True, f"Action {action_id} {decision}."
@@ -92,14 +98,13 @@ class ActionService:
         if str(action.get("status")) != "approved":
             return
         action["status"] = "running"
-        self.app.append_jsonl_row(
-            self.app.get_actions_audit_file(),
+        self._append_audit_row(
             {
                 "action_id": action_id,
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "status": "running",
                 "user": self.app.name,
-            },
+            }
         )
         self.app.append_system_message(
             f"Running action {action_id}: {action.get('summary', '')}"
@@ -119,15 +124,14 @@ class ActionService:
         action["output_preview"] = output_text
         action["exit_code"] = meta.get("exitCode")
         action["duration_ms"] = meta.get("durationMs")
-        self.app.append_jsonl_row(
-            self.app.get_actions_audit_file(),
+        self._append_audit_row(
             {
                 "action_id": action_id,
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "status": status,
                 "result": result.model_dump(exclude_none=True),
                 "user": self.app.name,
-            },
+            }
         )
         summary = (
             f"Action {action_id} {status}. "
@@ -190,7 +194,12 @@ class ActionService:
 
     def load_actions_from_audit(self) -> None:
         self.ensure_pending_actions_initialized()
-        path = self.app.get_actions_audit_file()
+        repo = getattr(self.app, "action_repository", None)
+        path = (
+            repo.get_actions_audit_file()
+            if repo is not None
+            else self.app.get_actions_audit_file()
+        )
         if not path.exists():
             return
         try:
@@ -245,14 +254,13 @@ class ActionService:
         if str(action.get("status", "")).strip() == "expired":
             return
         action["status"] = "expired"
-        self.app.append_jsonl_row(
-            self.app.get_actions_audit_file(),
+        self._append_audit_row(
             {
                 "action_id": action_id,
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "status": "expired",
                 "user": self.app.name,
-            },
+            }
         )
 
     def prune_terminal_actions(self) -> int:

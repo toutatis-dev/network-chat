@@ -14,33 +14,13 @@ from uuid import uuid4
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import (
-    HSplit,
-    Window,
-    VSplit,
-    FloatContainer,
-    Float,
-)
-from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import TextArea, Frame
 from prompt_toolkit.styles import Style
-from prompt_toolkit.layout.menus import CompletionsMenu
 
 from huddle_chat.constants import (
-    AGENT_ACTIONS_FILE,
-    AGENT_AUDIT_FILE,
-    AGENT_PROFILES_DIR_NAME,
-    AGENTS_DIR_NAME,
-    AI_CONFIG_FILE,
     AI_DM_ROOM,
     AI_HTTP_TIMEOUT_SECONDS,
-    ONBOARDING_STATE_FILE,
     CLIENT_ID_LENGTH,
     COLORS,
-    CONFIG_FILE,
     DEFAULT_PATH,
     DEFAULT_ROOM,
     EVENT_SCHEMA_VERSION,
@@ -54,18 +34,22 @@ from huddle_chat.constants import (
     LOCK_TIMEOUT_SECONDS,
     MAX_MESSAGES,
     MAX_PRESENCE_ID_LENGTH,
-    MEMORY_DIR_NAME,
-    MEMORY_GLOBAL_FILE,
-    MEMORY_PRIVATE_FILE,
-    MEMORY_REPO_FILE,
     MONITOR_POLL_INTERVAL_ACTIVE_SECONDS,
     PRESENCE_MALFORMED_QUARANTINE_THRESHOLD,
     PRESENCE_QUARANTINE_DIR_NAME,
     THEMES,
     PRESENCE_SIDEBAR_MIN_REFRESH_SECONDS,
 )
-from huddle_chat.commands.registry import CommandRegistry
+from huddle_chat.controller import ChatController
 from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
+from huddle_chat.repositories import (
+    ActionRepository,
+    AgentRepository,
+    ConfigRepository,
+    MemoryRepository,
+    MessageRepository,
+    PresenceRepository,
+)
 from huddle_chat.services import (
     ActionService,
     AIService,
@@ -80,6 +64,8 @@ from huddle_chat.services import (
     StorageService,
     ToolService,
 )
+from huddle_chat.state import AppState
+from huddle_chat.view import PromptToolkitView
 from huddle_chat.models import AgentProfile, ResolvedRoute, ChatEvent, ParsedAIArgs
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
@@ -113,6 +99,7 @@ else:
 
 logger = logging.getLogger(__name__)
 LOCK_MAX_ATTEMPTS = DEFAULT_LOCK_MAX_ATTEMPTS
+__all__ = ["ChatApp", "ChatLexer", "SlashCompleter"]
 
 
 class MessageFileWatchHandler(FileSystemEventHandler):
@@ -143,50 +130,50 @@ class MessageFileWatchHandler(FileSystemEventHandler):
 
 
 class ChatApp:
+    name: str
+    color: str
+    status: str
+    running: bool
+    current_theme: str
+    current_room: str
+    client_id: str
+    presence_file_id: str
+    base_dir: str
+    rooms_root: str
+    messages: list[str]
+    message_events: list[ChatEvent]
+    online_users: dict[str, dict[str, Any]]
+    last_pos_by_room: dict[str, int]
+    search_query: str
+    search_hits: list[int]
+    active_search_hit_idx: int
+    tool_paths: list[str]
+    active_agent_profile_id: str
+    pending_actions: dict[str, dict[str, Any]]
+    memory_draft_active: bool
+    memory_draft_mode: str
+    memory_draft: dict[str, Any] | None
+    playbook_run_state: dict[str, Any] | None
+    _presence_malformed_counts: dict[str, int]
+    ai_state_lock: Lock
+    ai_active_request_id: str | None
+    ai_active_started_at: float
+    ai_active_provider: str
+    ai_active_model: str
+    ai_active_scope: str
+    ai_active_room: str
+    ai_retry_count: int
+    ai_preview_text: str
+    ai_cancel_event: Event
+
     def __init__(self) -> None:
         self.ensure_locking_dependency()
-        self.name = "Anonymous"
-        self.color = "white"
-        self.status = ""
-        self.running = True
-        self.current_theme = "default"
-        self.current_room = DEFAULT_ROOM
+        self.state = AppState()
+        self.state.apply_to(self)
         self.client_id = self.generate_client_id()
         self.presence_file_id = self.client_id
 
-        self.messages: list[str] = []
-        self.message_events: list[ChatEvent] = []
-        self.online_users: dict[str, dict[str, Any]] = {}
-        self.last_pos_by_room: dict[str, int] = {}
-        self.search_query = ""
-        self.search_hits: list[int] = []
-        self.active_search_hit_idx = -1
-        self.monitor_refresh_event = Event()
-        self.monitor_poll_interval_seconds = MONITOR_POLL_INTERVAL_ACTIVE_SECONDS
-        self.monitor_idle_cycles = 0
-        self.file_observer = None
-        self.ai_state_lock = Lock()
-        self.ai_active_request_id: str | None = None
-        self.ai_active_started_at = 0.0
-        self.ai_active_provider = ""
-        self.ai_active_model = ""
-        self.ai_active_scope = ""
-        self.ai_active_room = ""
-        self.ai_retry_count = 0
-        self.ai_preview_text = ""
-        self.ai_cancel_event = Event()
-        self.memory_draft_active = False
-        self.memory_draft_mode = "none"
-        self.memory_draft: dict[str, Any] | None = None
-        self.agent_draft_active = False
-        self.agent_draft: dict[str, Any] | None = None
-        self.playbook_run_state: dict[str, Any] | None = None
-        self.pending_actions: dict[str, dict[str, Any]] = {}
-        self.presence_malformed_dropped = 0
-        self.presence_quarantined = 0
-        self.presence_write_failures = 0
-        self._presence_malformed_counts: dict[str, int] = {}
-        self._last_presence_sidebar_refresh_at = 0.0
+        self.config_repository = ConfigRepository()
         self.storage_service = StorageService(self)
         self.memory_service = MemoryService(self)
         self.ai_service = AIService(self)
@@ -231,6 +218,11 @@ class ChatApp:
             self.base_dir = self.prompt_for_path()
 
         self.rooms_root = os.path.join(self.base_dir, "rooms")
+        self.message_repository = MessageRepository(self)
+        self.presence_repository = PresenceRepository(self)
+        self.memory_repository = MemoryRepository(self)
+        self.agent_repository = AgentRepository(self)
+        self.action_repository = ActionRepository(self)
         self.ai_config = self.load_ai_config_data()
         self.ensure_paths()
         self.ensure_local_paths()
@@ -249,80 +241,15 @@ class ChatApp:
 
         self.save_config()
 
-        self.output_field = TextArea(
-            style="class:chat-area",
-            focusable=False,
-            wrap_lines=True,
-            lexer=ChatLexer(self),
-        )
-        self.input_field = TextArea(
-            height=3,
-            prompt="> ",
-            style="class:input-area",
-            multiline=False,
-            wrap_lines=False,
-            completer=SlashCompleter(self),
-            complete_while_typing=True,
-        )
-        self.sidebar_control = FormattedTextControl()
-        self.sidebar_window = Window(
-            content=self.sidebar_control, width=34, style="class:sidebar"
-        )
-
-        self.kb = KeyBindings()
-
-        @self.kb.add("enter")
-        def _(event: Any) -> None:
-            self.handle_input(self.input_field.text)
-
-        @self.kb.add("tab")
-        def _(event: Any) -> None:
-            buffer = event.current_buffer
-            complete_state = buffer.complete_state
-            if complete_state is not None:
-                completion = complete_state.current_completion
-                if completion is None and complete_state.completions:
-                    completion = complete_state.completions[0]
-                if completion is not None:
-                    buffer.apply_completion(completion)
-                    return
-            buffer.start_completion(select_first=True)
-
-        @self.kb.add("c-c")
-        def _(event: Any) -> None:
-            event.app.exit()
-
-        root_container = HSplit(
-            [
-                VSplit(
-                    [
-                        Frame(self.output_field, title="Chat History"),
-                        Frame(self.sidebar_window, title="Online"),
-                    ]
-                ),
-                Frame(self.input_field, title="Your Message (/ for commands)"),
-            ]
-        )
-
-        self.layout_container = FloatContainer(
-            content=root_container,
-            floats=[
-                Float(
-                    xcursor=True,
-                    ycursor=True,
-                    content=CompletionsMenu(max_height=16, scroll_offset=1),
-                )
-            ],
-        )
-
-        self.application: Any = Application(
-            layout=Layout(self.layout_container),
-            key_bindings=self.kb,
-            style=self.get_style(),
-            full_screen=True,
-            mouse_support=True,
-        )
-        self.command_handlers = self.build_command_handlers()
+        self.controller = ChatController(self)
+        self.view = PromptToolkitView(self, on_submit=self.controller.handle_input)
+        self.output_field = self.view.output_field
+        self.input_field = self.view.input_field
+        self.sidebar_control = self.view.sidebar_control
+        self.sidebar_window = self.view.sidebar_window
+        self.layout_container = self.view.layout_container
+        self.application = self.view.application
+        self.command_handlers = self.controller.build_command_handlers()
 
     def ensure_locking_dependency(self) -> None:
         if portalocker is not None:
@@ -337,33 +264,29 @@ class ChatApp:
         )
 
     def load_config_data(self) -> dict[str, Any]:
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError) as exc:
-                logger.warning("Failed to load config from %s: %s", CONFIG_FILE, exc)
-        return {}
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        return self.config_repository.load_config()
 
     def save_config(self) -> None:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "path": self.base_dir,
-                    "theme": self.current_theme,
-                    "username": self.name,
-                    "room": self.current_room,
-                    "client_id": self.client_id,
-                    "agent_profile": getattr(
-                        self, "active_agent_profile_id", "default"
-                    ),
-                    "tool_paths": list(getattr(self, "tool_paths", [])),
-                },
-                f,
-            )
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        self.config_repository.save_config(
+            {
+                "path": self.base_dir,
+                "theme": self.current_theme,
+                "username": self.name,
+                "room": self.current_room,
+                "client_id": self.client_id,
+                "agent_profile": getattr(self, "active_agent_profile_id", "default"),
+                "tool_paths": list(getattr(self, "tool_paths", [])),
+            }
+        )
 
     def get_onboarding_state_path(self) -> Path:
-        return Path(ONBOARDING_STATE_FILE)
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        return self.config_repository.get_onboarding_state_path()
 
     def get_style(self) -> Style:
         theme_dict = THEMES.get(self.current_theme, THEMES["default"])
@@ -450,55 +373,48 @@ class ChatApp:
             logger.warning("Failed ensuring local AI paths: %s", exc)
 
     def get_memory_dir(self) -> Path:
-        return (Path(str(self.base_dir)) / MEMORY_DIR_NAME).resolve()
+        self.ensure_repositories_initialized()
+        return self.memory_repository.get_memory_dir()
 
     def get_memory_file(self) -> Path:
-        return self.get_memory_dir() / MEMORY_GLOBAL_FILE
+        self.ensure_repositories_initialized()
+        return self.memory_repository.get_memory_file()
 
     def get_private_memory_file(self) -> Path:
-        return Path(LOCAL_MEMORY_ROOT).resolve() / MEMORY_PRIVATE_FILE
+        self.ensure_repositories_initialized()
+        return self.memory_repository.get_private_memory_file()
 
     def get_repo_memory_file(self) -> Path:
-        return Path(LOCAL_MEMORY_ROOT).resolve() / MEMORY_REPO_FILE
+        self.ensure_repositories_initialized()
+        return self.memory_repository.get_repo_memory_file()
 
     def ensure_memory_paths(self) -> None:
-        try:
-            memory_dir = self.get_memory_dir()
-            os.makedirs(memory_dir, exist_ok=True)
-            self.get_memory_file().touch(exist_ok=True)
-            os.makedirs(Path(LOCAL_MEMORY_ROOT).resolve(), exist_ok=True)
-            self.get_private_memory_file().touch(exist_ok=True)
-            self.get_repo_memory_file().touch(exist_ok=True)
-        except OSError as exc:
-            logger.warning("Failed ensuring memory paths: %s", exc)
+        self.ensure_repositories_initialized()
+        self.memory_repository.ensure_memory_paths()
 
     def get_agents_dir(self) -> Path:
-        return (Path(str(self.base_dir)) / AGENTS_DIR_NAME).resolve()
+        self.ensure_repositories_initialized()
+        return self.agent_repository.get_agents_dir()
 
     def get_agent_profiles_dir(self) -> Path:
-        return (self.get_agents_dir() / AGENT_PROFILES_DIR_NAME).resolve()
+        self.ensure_repositories_initialized()
+        return self.agent_repository.get_agent_profiles_dir()
 
     def get_agent_profile_path(self, profile_id: str) -> Path:
-        safe_id = self.sanitize_agent_id(profile_id)
-        base = self.get_agent_profiles_dir().resolve()
-        target = (base / f"{safe_id}.json").resolve()
-        if target.parent != base:
-            raise ValueError("Invalid agent profile path.")
-        return target
+        self.ensure_repositories_initialized()
+        return self.agent_repository.get_agent_profile_path(profile_id)
 
     def get_agent_audit_file(self) -> Path:
-        return self.get_agents_dir() / AGENT_AUDIT_FILE
+        self.ensure_repositories_initialized()
+        return self.agent_repository.get_agent_audit_file()
 
     def get_actions_audit_file(self) -> Path:
-        return self.get_agents_dir() / AGENT_ACTIONS_FILE
+        self.ensure_repositories_initialized()
+        return self.action_repository.get_actions_audit_file()
 
     def ensure_agent_paths(self) -> None:
-        try:
-            os.makedirs(self.get_agent_profiles_dir(), exist_ok=True)
-            self.get_agent_audit_file().touch(exist_ok=True)
-            self.get_actions_audit_file().touch(exist_ok=True)
-        except OSError as exc:
-            logger.warning("Failed ensuring agent paths: %s", exc)
+        self.ensure_repositories_initialized()
+        self.agent_repository.ensure_agent_paths()
 
     def append_jsonl_row(self, path: Path, row: dict[str, Any]) -> bool:
         self.ensure_locking_dependency()
@@ -551,51 +467,14 @@ class ChatApp:
 
     def load_ai_config_data(self) -> dict[str, Any]:
         default = self.get_default_ai_config()
-        path = Path(AI_CONFIG_FILE)
-        if not path.exists():
-            return default
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.warning("Failed to load AI config from %s: %s", AI_CONFIG_FILE, exc)
-            return default
-
-        if not isinstance(loaded, dict):
-            return default
-        providers = loaded.get("providers", {})
-        if not isinstance(providers, dict):
-            providers = {}
-        merged = default
-        for provider_name in ("gemini", "openai"):
-            existing = providers.get(provider_name, {})
-            if isinstance(existing, dict):
-                merged["providers"][provider_name].update(existing)
-        default_provider = str(loaded.get("default_provider", "")).strip().lower()
-        if default_provider in merged["providers"]:
-            merged["default_provider"] = default_provider
-        loaded_streaming = loaded.get("streaming", {})
-        if isinstance(loaded_streaming, dict):
-            loaded_enabled = loaded_streaming.get("enabled")
-            if isinstance(loaded_enabled, bool):
-                merged["streaming"]["enabled"] = loaded_enabled
-            loaded_streaming_providers = loaded_streaming.get("providers", {})
-            if isinstance(loaded_streaming_providers, dict):
-                for provider_name in ("gemini", "openai"):
-                    provider_enabled = loaded_streaming_providers.get(provider_name)
-                    if isinstance(provider_enabled, bool):
-                        merged["streaming"]["providers"][
-                            provider_name
-                        ] = provider_enabled
-        return merged
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        return self.config_repository.load_ai_config(default)
 
     def save_ai_config_data(self) -> None:
-        try:
-            os.makedirs(LOCAL_CHAT_ROOT, exist_ok=True)
-            with open(AI_CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.ai_config, f, indent=2)
-        except OSError as exc:
-            logger.warning("Failed saving AI config: %s", exc)
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        self.config_repository.save_ai_config(self.ai_config)
 
     def parse_ai_args(self, arg_text: str) -> tuple[ParsedAIArgs, str | None]:
         self.ensure_services_initialized()
@@ -686,29 +565,20 @@ class ChatApp:
         )
 
     def get_room_dir(self, room: str | None = None) -> Path:
-        active_room = self.sanitize_room_name(room or self.current_room)
-        base = Path(self.rooms_root).resolve()
-        target = (base / active_room).resolve()
-        if target.parent != base:
-            raise ValueError("Invalid room path.")
-        return target
+        self.ensure_repositories_initialized()
+        return self.message_repository.get_room_dir(room)
 
     def get_message_file(self, room: str | None = None) -> Path:
-        if self.is_local_room(room):
-            return self.get_local_message_file(room)
-        return self.get_room_dir(room) / "messages.jsonl"
+        self.ensure_repositories_initialized()
+        return self.message_repository.get_message_file(room)
 
     def get_presence_dir(self, room: str | None = None) -> Path:
-        if self.is_local_room(room):
-            return self.get_local_room_dir(room) / "presence"
-        return self.get_room_dir(room) / "presence"
+        self.ensure_repositories_initialized()
+        return self.presence_repository.get_presence_dir(room)
 
     def get_presence_path(self, room: str | None = None) -> Path:
-        base = self.get_presence_dir(room).resolve()
-        target = (base / self.presence_file_id).resolve()
-        if target.parent != base:
-            raise ValueError("Invalid username for presence path.")
-        return target
+        self.ensure_repositories_initialized()
+        return self.presence_repository.get_presence_path(room)
 
     def update_room_paths(self) -> None:
         # Compatibility aliases used by existing tests.
@@ -716,17 +586,8 @@ class ChatApp:
         self.presence_dir = str(self.get_presence_dir())
 
     def list_rooms(self) -> list[str]:
-        rooms: list[str] = []
-        root = Path(self.rooms_root)
-        if not root.exists():
-            return sorted({self.current_room, AI_DM_ROOM})
-        for entry in root.iterdir():
-            if entry.is_dir():
-                rooms.append(self.sanitize_room_name(entry.name))
-        rooms.append(AI_DM_ROOM)
-        if self.current_room not in rooms:
-            rooms.append(self.current_room)
-        return sorted(set(rooms))
+        self.ensure_repositories_initialized()
+        return self.message_repository.list_rooms()
 
     def prompt_for_path(self) -> str:
         print("--- Huddle Chat Setup ---")
@@ -773,112 +634,24 @@ class ChatApp:
                     print(f"Failed to create: {exc}")
 
     def ensure_paths(self) -> None:
-        try:
-            os.makedirs(self.rooms_root, exist_ok=True)
-            if not self.is_local_room():
-                room_dir = self.get_room_dir()
-                os.makedirs(room_dir, exist_ok=True)
-                os.makedirs(self.get_presence_dir(), exist_ok=True)
-                self.get_message_file().touch(exist_ok=True)
-        except OSError as exc:
-            logger.warning("Failed ensuring room paths: %s", exc)
+        self.ensure_repositories_initialized()
+        self.message_repository.ensure_paths()
 
     def get_online_users(self, room: str | None = None) -> dict[str, dict[str, Any]]:
-        online: dict[str, dict[str, Any]] = {}
-        if self.is_local_room(room):
-            return online
-        now = time.time()
-        presence_dir = self.get_presence_dir(room)
-        if not presence_dir.exists():
-            return online
-
-        for path in presence_dir.iterdir():
-            if not path.is_file():
-                continue
-            try:
-                st_mtime = path.stat().st_mtime
-                if now - st_mtime >= 30:
-                    path.unlink(missing_ok=True)
-                    continue
-                entry = self.load_presence_entry(
-                    path, fallback_room=room, st_mtime=st_mtime
-                )
-                if entry is not None:
-                    client_id = str(entry.get("client_id", ""))
-                    online[client_id] = entry
-            except OSError as exc:
-                logger.warning("Failed to process presence file %s: %s", path, exc)
-            except (json.JSONDecodeError, ValueError):
-                self._drop_malformed_presence(path)
-
-        return online
+        self.ensure_repositories_initialized()
+        return self.presence_repository.get_online_users(room)
 
     def load_presence_entry(
         self, path: Path, fallback_room: str | None, st_mtime: float
     ) -> dict[str, Any] | None:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        client_id = self.normalize_client_id(path.name)
-        if isinstance(data, dict):
-            display_name = str(data.get("name", "Anonymous")).strip()
-            if not display_name:
-                display_name = "Anonymous"
-            room_name = self.sanitize_room_name(
-                str(data.get("room", fallback_room or self.current_room))
-            )
-            normalized = dict(data)
-            normalized["name"] = display_name
-            normalized["client_id"] = client_id
-            normalized["room"] = room_name
-            if "last_seen" not in normalized:
-                normalized["last_seen"] = st_mtime
-            return normalized
-        return {
-            "name": "Anonymous",
-            "color": "white",
-            "status": "",
-            "client_id": client_id,
-            "room": self.sanitize_room_name(fallback_room or self.current_room),
-            "last_seen": st_mtime,
-        }
+        self.ensure_repositories_initialized()
+        return self.presence_repository.load_presence_entry(
+            path, fallback_room, st_mtime
+        )
 
     def get_online_users_all_rooms(self) -> dict[str, dict[str, Any]]:
-        online: dict[str, dict[str, Any]] = {}
-        now = time.time()
-        root = Path(self.rooms_root)
-        if not root.exists():
-            return online
-        for room_dir in root.iterdir():
-            if not room_dir.is_dir():
-                continue
-            room = self.sanitize_room_name(room_dir.name)
-            presence_dir = room_dir / "presence"
-            if not presence_dir.exists() or not presence_dir.is_dir():
-                continue
-            for path in presence_dir.iterdir():
-                if not path.is_file():
-                    continue
-                try:
-                    st_mtime = path.stat().st_mtime
-                    if now - st_mtime >= 30:
-                        path.unlink(missing_ok=True)
-                        continue
-                    entry = self.load_presence_entry(
-                        path, fallback_room=room, st_mtime=st_mtime
-                    )
-                    if entry is None:
-                        continue
-                    client_id = str(entry.get("client_id", ""))
-                    seen = online.get(client_id)
-                    current_seen = float(entry.get("last_seen", st_mtime))
-                    prior_seen = float(seen.get("last_seen", 0.0)) if seen else 0.0
-                    if seen is None or current_seen >= prior_seen:
-                        online[client_id] = entry
-                except OSError as exc:
-                    logger.warning("Failed to process presence file %s: %s", path, exc)
-                except (json.JSONDecodeError, ValueError):
-                    self._drop_malformed_presence(path)
-        return online
+        self.ensure_repositories_initialized()
+        return self.presence_repository.get_online_users_all_rooms()
 
     def _drop_malformed_presence(self, path: Path) -> None:
         self.ensure_presence_health_initialized()
@@ -930,23 +703,14 @@ class ChatApp:
 
     def _write_presence_atomic(self, presence_path: Path, data: dict[str, Any]) -> bool:
         self.ensure_presence_health_initialized()
-        tmp_name = f".{presence_path.name}.tmp-{os.getpid()}-{uuid4().hex[:8]}"
-        tmp_path = presence_path.with_name(tmp_name)
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, presence_path)
-            return True
+            if self.presence_repository.write_presence_atomic(presence_path, data):
+                return True
+            self.presence_write_failures += 1
+            return False
         except OSError:
             self.presence_write_failures += 1
             return False
-        finally:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def heartbeat(self) -> None:
         current_presence_path: Path | None = None
@@ -1286,7 +1050,22 @@ class ChatApp:
             self.ai_preview_text = ""
             self.ai_cancel_event = Event()
 
+    def ensure_repositories_initialized(self) -> None:
+        if not hasattr(self, "config_repository"):
+            self.config_repository = ConfigRepository()
+        if not hasattr(self, "message_repository"):
+            self.message_repository = MessageRepository(self)
+        if not hasattr(self, "presence_repository"):
+            self.presence_repository = PresenceRepository(self)
+        if not hasattr(self, "memory_repository"):
+            self.memory_repository = MemoryRepository(self)
+        if not hasattr(self, "agent_repository"):
+            self.agent_repository = AgentRepository(self)
+        if not hasattr(self, "action_repository"):
+            self.action_repository = ActionRepository(self)
+
     def ensure_services_initialized(self) -> None:
+        self.ensure_repositories_initialized()
         if not hasattr(self, "storage_service"):
             self.storage_service = StorageService(self)
         if not hasattr(self, "memory_service"):
@@ -1324,6 +1103,8 @@ class ChatApp:
             self.active_agent_profile_id = "default"
         if not hasattr(self, "tool_paths"):
             self.tool_paths = []
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
 
     def apply_search_highlight(
         self, tokens: list[tuple[str, str]], query: str
@@ -1819,50 +1600,14 @@ class ChatApp:
         )
 
     def build_command_handlers(self) -> dict[str, Any]:
-        return CommandRegistry(self).build()
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        return self.controller.build_command_handlers()
 
     def handle_input(self, text: str) -> None:
-        text = text.strip()
-        if not text:
-            return
-
-        if self.handle_memory_confirmation_input(text):
-            self.input_field.text = ""
-            return
-
-        if self.handle_playbook_confirmation_input(text):
-            self.input_field.text = ""
-            return
-
-        if text.startswith("/"):
-            if not hasattr(self, "command_handlers"):
-                self.command_handlers = self.build_command_handlers()
-            parts = text.split(" ", 1)
-            command = parts[0].lower()
-            args = parts[1] if len(parts) > 1 else ""
-            handler = self.command_handlers.get(command)
-            if handler is None:
-                self.ensure_services_initialized()
-                self.append_system_message(
-                    self.help_service.format_guided_error(
-                        problem=f"Unknown command '{command}'.",
-                        why="The command is not in the registered slash command list.",
-                        next_step="Run /help overview to see available workflows and commands.",
-                    )
-                )
-                self.input_field.text = ""
-                return
-            handler(args)
-            self.input_field.text = ""
-            return
-
-        event = self.build_event("chat", text)
-        if self.write_to_file(event):
-            self.input_field.text = ""
-        else:
-            self.append_system_message(
-                "Error: Could not send message. Network busy or locked."
-            )
+        if not hasattr(self, "controller"):
+            self.controller = ChatController(self)
+        self.controller.handle_input(text)
 
     def write_to_file(
         self, payload: dict[str, Any] | str | ChatEvent, room: str | None = None

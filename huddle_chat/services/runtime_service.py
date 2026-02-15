@@ -32,7 +32,12 @@ class RuntimeService:
                 next_presence_refresh = now + PRESENCE_REFRESH_INTERVAL_SECONDS
 
             room = self.app.current_room
-            message_file = self.app.get_message_file(room)
+            repo = getattr(self.app, "message_repository", None)
+            message_file = (
+                repo.get_message_file(room)
+                if repo is not None
+                else self.app.get_message_file(room)
+            )
             self.app.last_pos_by_room.setdefault(room, 0)
             had_new_messages = False
 

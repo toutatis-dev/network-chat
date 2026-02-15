@@ -48,8 +48,13 @@ class AgentService:
         )
 
     def ensure_default_profile(self) -> None:
-        self.app.ensure_agent_paths()
-        profile_path = self.app.get_agent_profile_path(DEFAULT_AGENT_PROFILE_ID)
+        repo = getattr(self.app, "agent_repository", None)
+        if repo is not None:
+            repo.ensure_agent_paths()
+            profile_path = repo.get_agent_profile_path(DEFAULT_AGENT_PROFILE_ID)
+        else:
+            self.app.ensure_agent_paths()
+            profile_path = self.app.get_agent_profile_path(DEFAULT_AGENT_PROFILE_ID)
         if profile_path.exists():
             return
         default = self.get_default_profile()
@@ -61,7 +66,13 @@ class AgentService:
     def list_profiles(self) -> list[AgentProfile]:
         self.ensure_default_profile()
         profiles: list[AgentProfile] = []
-        for path in sorted(self.app.get_agent_profiles_dir().glob("*.json")):
+        repo = getattr(self.app, "agent_repository", None)
+        profiles_dir = (
+            repo.get_agent_profiles_dir()
+            if repo is not None
+            else self.app.get_agent_profiles_dir()
+        )
+        for path in sorted(profiles_dir.glob("*.json")):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -75,7 +86,12 @@ class AgentService:
 
     def get_profile(self, profile_id: str) -> AgentProfile | None:
         safe_id = self.app.sanitize_agent_id(profile_id)
-        path = self.app.get_agent_profile_path(safe_id)
+        repo = getattr(self.app, "agent_repository", None)
+        path = (
+            repo.get_agent_profile_path(safe_id)
+            if repo is not None
+            else self.app.get_agent_profile_path(safe_id)
+        )
         if not path.exists():
             return None
         try:
@@ -119,7 +135,11 @@ class AgentService:
             "profile_id": profile_id,
             "actor": actor,
         }
-        self.app.append_jsonl_row(self.app.get_agent_audit_file(), row)
+        repo = getattr(self.app, "agent_repository", None)
+        if repo is not None:
+            repo.append_agent_audit_row(row)
+        else:
+            self.app.append_jsonl_row(self.app.get_agent_audit_file(), row)
 
     def upsert_profile(
         self,
@@ -151,7 +171,12 @@ class AgentService:
             version=version,
         )
 
-        path = self.app.get_agent_profile_path(safe_id)
+        repo = getattr(self.app, "agent_repository", None)
+        path = (
+            repo.get_agent_profile_path(safe_id)
+            if repo is not None
+            else self.app.get_agent_profile_path(safe_id)
+        )
         try:
             path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
         except OSError as exc:
@@ -176,7 +201,12 @@ class AgentService:
         if not profile.created_by:
             profile.created_by = existing.created_by if existing else actor
 
-        path = self.app.get_agent_profile_path(profile_id)
+        repo = getattr(self.app, "agent_repository", None)
+        path = (
+            repo.get_agent_profile_path(profile_id)
+            if repo is not None
+            else self.app.get_agent_profile_path(profile_id)
+        )
         try:
             path.write_text(json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
         except OSError as exc:
