@@ -132,12 +132,11 @@ class AgentService:
     ) -> tuple[bool, str]:
         safe_id = self.app.sanitize_agent_id(profile_id)
         existing = self.get_profile(safe_id)
+        defaults = self.get_default_profile()
+        base_profile = existing if existing else defaults
+        version = ((existing.version or 0) + 1) if existing else 1
+        created_by = (existing.created_by if existing else actor) or actor
 
-        # If existing is None, create a base from default, otherwise use existing
-        base_profile = existing if existing else self.get_default_profile()
-        version = (base_profile.version or 0) + 1
-
-        # Construct new profile merging inputs with base defaults
         profile = AgentProfile(
             id=safe_id,
             name=name.strip() or safe_id,
@@ -146,7 +145,7 @@ class AgentService:
             tool_policy=base_profile.tool_policy,
             memory_policy=base_profile.memory_policy,
             routing_policy=base_profile.routing_policy,
-            created_by=base_profile.created_by or actor,
+            created_by=created_by,
             updated_by=actor,
             updated_at=datetime.now().isoformat(timespec="seconds"),
             version=version,

@@ -54,6 +54,7 @@ class StorageService:
                 logger.warning("Future event schema version %s ignored.", version)
                 return None
 
+        data["type"] = event_type
         try:
             return ChatEvent.from_dict(data)
         except ValidationError as e:

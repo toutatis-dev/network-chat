@@ -77,6 +77,15 @@ def test_parse_event_line_accepts_missing_version_and_extra_fields(tmp_path):
     assert event.x_meta == "ok"
 
 
+def test_parse_event_line_normalizes_event_type_to_lowercase(tmp_path):
+    app = build_contract_app(tmp_path)
+    event = app.parse_event_line(
+        '{"ts":"2026-02-13T12:00:00","type":"CHAT","author":"a","text":"b"}'
+    )
+    assert event is not None
+    assert event.type == "chat"
+
+
 def test_parse_event_line_rejects_future_schema_version(tmp_path):
     app = build_contract_app(tmp_path)
     event = app.parse_event_line(
@@ -109,6 +118,44 @@ def test_write_to_file_writes_jsonl_row_with_newline(tmp_path, monkeypatch):
     row = json.loads(line)
     assert row["type"] == "chat"
     assert row["text"] == "hello world"
+    assert "memory_ids_used" not in row
+    assert "memory_topics_used" not in row
+
+
+def test_upsert_profile_sets_created_by_actor_and_initial_version(tmp_path):
+    app = build_contract_app(tmp_path)
+    app.ensure_services_initialized()
+    app.ensure_agent_paths()
+
+    ok, _ = app.agent_service.upsert_profile(
+        profile_id="new_profile",
+        name="New Profile",
+        description="",
+        system_prompt="test prompt",
+        actor="alice",
+    )
+    assert ok is True
+
+    profile = app.agent_service.get_profile("new_profile")
+    assert profile is not None
+    assert profile.created_by == "alice"
+    assert profile.updated_by == "alice"
+    assert profile.version == 1
+
+    ok, _ = app.agent_service.upsert_profile(
+        profile_id="new_profile",
+        name="New Profile",
+        description="",
+        system_prompt="test prompt",
+        actor="bob",
+    )
+    assert ok is True
+
+    updated = app.agent_service.get_profile("new_profile")
+    assert updated is not None
+    assert updated.created_by == "alice"
+    assert updated.updated_by == "bob"
+    assert updated.version == 2
 
 
 def test_append_jsonl_row_uses_locked_append(tmp_path, monkeypatch):

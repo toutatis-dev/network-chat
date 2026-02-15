@@ -21,7 +21,12 @@ class ChatEvent(BaseModel):
     memory_topics_used: list[str] = Field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return self.model_dump(exclude_none=True)
+        data = self.model_dump(exclude_none=True)
+        if not self.memory_ids_used:
+            data.pop("memory_ids_used", None)
+        if not self.memory_topics_used:
+            data.pop("memory_topics_used", None)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatEvent":
