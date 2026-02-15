@@ -22,8 +22,10 @@ def test_approve_executes_action_and_updates_status():
         }
     }
     app.get_active_agent_profile = lambda: SimpleNamespace(id="default")
-    app.append_jsonl_row = lambda path, row: True
-    app.get_actions_audit_file = lambda: "actions.jsonl"
+    app.action_repository = SimpleNamespace(
+        append_row=lambda row: True,
+        load_audit_rows=lambda: [],
+    )
     messages: list[str] = []
     app.append_system_message = lambda text: messages.append(text)
     app.tool_service = SimpleNamespace(
@@ -67,8 +69,10 @@ def test_expired_action_cannot_be_approved():
         }
     }
     app.get_active_agent_profile = lambda: SimpleNamespace(id="default")
-    app.append_jsonl_row = lambda path, row: True
-    app.get_actions_audit_file = lambda: "actions.jsonl"
+    app.action_repository = SimpleNamespace(
+        append_row=lambda row: True,
+        load_audit_rows=lambda: [],
+    )
     app.append_system_message = lambda text: None
     app.tool_service = SimpleNamespace(
         execute_action=lambda action: ToolCallResult(

@@ -15,6 +15,8 @@ class AppEvent(BaseModel):
     topic: str
     source: str
     correlation_id: str | None = None
+    critical: bool = False
+    retry_count: int = 0
 
 
 class SystemMessageEvent(AppEvent):

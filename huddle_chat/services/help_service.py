@@ -153,7 +153,7 @@ class HelpService:
                 # Fallback if somehow dicts sneak in (e.g. tests not fully updated)
                 if str(event.get("type", "")).strip().lower() == "ai_prompt":
                     return True
-        ai_dm_file = self.app.get_local_message_file("ai-dm")
+        ai_dm_file = self.app.message_repository.get_message_file("ai-dm")
         return "ai_prompt" in self._scan_recent_event_types(ai_dm_file)
 
     def _has_action_review_or_decision(self) -> bool:

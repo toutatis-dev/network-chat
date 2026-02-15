@@ -365,7 +365,7 @@ class AIService:
         prompt_event.provider = provider
         prompt_event.model = model
         prompt_event.request_id = request_id
-        if not self.app.write_to_file(prompt_event, room=target_room):
+        if not self.app.storage_service.write_to_file(prompt_event, room=target_room):
             self.app.controller.clear_ai_request_state(request_id)
             emit_system_message(self.app, "Error: Failed to persist AI prompt.")
             return
@@ -465,7 +465,7 @@ class AIService:
         if error_text:
             error_event = self.app.build_event("system", error_text)
             error_event.request_id = request_id
-            self.app.write_to_file(error_event, room=target_room)
+            self.app.storage_service.write_to_file(error_event, room=target_room)
             should_notify_private_failure = is_private and not self.app.is_local_room()
             if should_notify_private_failure:
                 should_notify_private_failure = "cancelled" not in error_text.lower()
@@ -526,7 +526,7 @@ class AIService:
         if self.app.controller.is_ai_request_cancelled(request_id):
             canceled_event = self.app.build_event("system", "AI request cancelled.")
             canceled_event.request_id = request_id
-            self.app.write_to_file(canceled_event, room=target_room)
+            self.app.storage_service.write_to_file(canceled_event, room=target_room)
             self.app.controller.clear_ai_request_state(request_id)
             emit_refresh_output(self.app)
             return
@@ -538,7 +538,7 @@ class AIService:
         if memory_ids_used:
             response_event.memory_ids_used = memory_ids_used
             response_event.memory_topics_used = memory_topics_used
-        if not self.app.write_to_file(response_event, room=target_room):
+        if not self.app.storage_service.write_to_file(response_event, room=target_room):
             self.app.controller.clear_ai_request_state(request_id)
             emit_system_message(self.app, "Error: Failed to persist AI response.")
             return
@@ -547,18 +547,18 @@ class AIService:
         if ids_line:
             memory_event = self.app.build_event("system", ids_line)
             memory_event.request_id = request_id
-            self.app.write_to_file(memory_event, room=target_room)
+            self.app.storage_service.write_to_file(memory_event, room=target_room)
         if action_ids:
             actions_event = self.app.build_event(
                 "system",
                 f"Proposed actions: {', '.join(action_ids)}. Use /actions then /approve <id>.",
             )
             actions_event.request_id = request_id
-            self.app.write_to_file(actions_event, room=target_room)
+            self.app.storage_service.write_to_file(actions_event, room=target_room)
         if action_warning:
             warn_event = self.app.build_event("system", action_warning)
             warn_event.request_id = request_id
-            self.app.write_to_file(warn_event, room=target_room)
+            self.app.storage_service.write_to_file(warn_event, room=target_room)
 
         if is_private and not self.app.is_local_room():
             emit_system_message(

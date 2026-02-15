@@ -25,6 +25,7 @@ class ChatController:
     def __init__(self, app: "ChatApp"):
         self.app = app
         self.command_handlers: dict[str, Any] = {}
+        self._seen_system_event_ids: list[str] = []
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self.app, item)
@@ -40,6 +41,11 @@ class ChatController:
         bus.subscribe(RunCommandEvent, self.on_run_command_event)
 
     def on_system_message_event(self, event: SystemMessageEvent) -> None:
+        if event.event_id in self._seen_system_event_ids:
+            return
+        self._seen_system_event_ids.append(event.event_id)
+        if len(self._seen_system_event_ids) > 256:
+            self._seen_system_event_ids = self._seen_system_event_ids[-128:]
         self.app.append_system_message(event.text)
 
     def on_refresh_output_event(self, _event: RefreshOutputEvent) -> None:

@@ -62,6 +62,9 @@ def build_ai_app(tmp_path: Path) -> chat.ChatApp:
     app.ensure_paths()
     app.ensure_local_paths()
     app.update_room_paths()
+    app.storage_service = SimpleNamespace(
+        write_to_file=lambda payload, room=None: app.write_to_file(payload, room)
+    )
     app.controller = chat.ChatController(app)
     return app
 

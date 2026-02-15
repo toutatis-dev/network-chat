@@ -251,7 +251,7 @@ class CommandOpsService:
                     "default_provider", "ai"
                 )
                 payload.model = event.model or ""
-            if self.app.write_to_file(payload, room=target_room):
+            if self.app.storage_service.write_to_file(payload, room=target_room):
                 shared_count += 1
         emit_system_message(
             self.app, f"Shared {shared_count} message(s) from #ai-dm to #{target_room}."

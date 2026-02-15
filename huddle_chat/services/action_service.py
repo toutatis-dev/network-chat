@@ -21,10 +21,7 @@ class ActionService:
             self.app.pending_actions = {}
 
     def _append_audit_row(self, row: dict[str, Any]) -> bool:
-        repo = getattr(self.app, "action_repository", None)
-        if repo is not None:
-            return repo.append_row(row)
-        return self.app.append_jsonl_row(self.app.get_actions_audit_file(), row)
+        return self.app.action_repository.append_row(row)
 
     def create_pending_action(
         self,
@@ -196,28 +193,7 @@ class ActionService:
 
     def load_actions_from_audit(self) -> None:
         self.ensure_pending_actions_initialized()
-        repo = getattr(self.app, "action_repository", None)
-        if repo is not None:
-            rows = repo.load_audit_rows()
-        else:
-            path = self.app.get_actions_audit_file()
-            if not path.exists():
-                return
-            rows = []
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            row = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(row, dict):
-                            rows.append(row)
-            except OSError:
-                return
+        rows = self.app.action_repository.load_audit_rows()
 
         for row in rows:
             action_id = str(row.get("action_id", "")).strip()
