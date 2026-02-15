@@ -31,7 +31,7 @@ from huddle_chat.view import PromptToolkitView
 
 
 class ChatAppContainer(containers.DeclarativeContainer):
-    app = providers.Dependency()
+    app: object = providers.Dependency()
 
     config_repository = providers.Singleton(ConfigRepository)
     message_repository = providers.Singleton(MessageRepository, app=app)
