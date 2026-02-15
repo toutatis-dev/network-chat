@@ -171,7 +171,12 @@ class HelpService:
     def _has_action_review_or_decision(self) -> bool:
         if getattr(self.app, "pending_actions", {}):
             return True
-        path = self.app.get_actions_audit_file()
+        action_repo = getattr(self.app, "action_repository", None)
+        path = (
+            action_repo.get_actions_audit_file()
+            if action_repo is not None
+            else self.app.get_actions_audit_file()
+        )
         if not path.exists():
             return False
         try:
@@ -207,11 +212,21 @@ class HelpService:
         return False
 
     def _has_saved_memory(self) -> bool:
-        for path in (
-            self.app.get_memory_file(),
-            self.app.get_private_memory_file(),
-            self.app.get_repo_memory_file(),
-        ):
+        memory_repo = getattr(self.app, "memory_repository", None)
+        if memory_repo is not None:
+            paths = (
+                memory_repo.get_memory_file(),
+                memory_repo.get_private_memory_file(),
+                memory_repo.get_repo_memory_file(),
+            )
+        else:
+            paths = (
+                self.app.get_memory_file(),
+                self.app.get_private_memory_file(),
+                self.app.get_repo_memory_file(),
+            )
+
+        for path in paths:
             if not path.exists():
                 continue
             try:

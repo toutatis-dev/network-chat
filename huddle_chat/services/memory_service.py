@@ -1,8 +1,6 @@
 import difflib
 import json
 import logging
-import os
-import random
 import re
 import shlex
 import time
@@ -15,10 +13,6 @@ from huddle_chat.constants import (
     AI_MEMORY_FINAL_LIMIT,
     AI_MEMORY_PREFILTER_LIMIT,
     AI_MEMORY_SUMMARY_CHAR_LIMIT,
-    LOCK_BACKOFF_BASE_SECONDS,
-    LOCK_BACKOFF_MAX_SECONDS,
-    LOCK_MAX_ATTEMPTS,
-    LOCK_TIMEOUT_SECONDS,
     MEMORY_DUPLICATE_THRESHOLD,
 )
 from huddle_chat.models import ChatEvent
@@ -64,6 +58,9 @@ class MemoryService:
         return normalized or ["team"]
 
     def get_memory_file_for_scope(self, scope: str):
+        repo = getattr(self.app, "memory_repository", None)
+        if repo is not None:
+            return repo.get_memory_file_for_scope(scope)
         if scope == "private":
             return self.app.get_private_memory_file()
         if scope == "repo":
@@ -75,6 +72,9 @@ class MemoryService:
     ) -> list[dict[str, Any]]:
         self.app.ensure_memory_paths()
         normalized_scopes = self.normalize_memory_scopes(scopes)
+        repo = getattr(self.app, "memory_repository", None)
+        if repo is not None:
+            return repo.load_entries_for_scopes(normalized_scopes)
         entries: list[dict[str, Any]] = []
         for scope in normalized_scopes:
             path = self.get_memory_file_for_scope(scope)
@@ -370,41 +370,22 @@ class MemoryService:
         self.app.append_system_message("\n".join(lines))
 
     def write_memory_entry(self, entry: dict[str, Any], scope: str = "team") -> bool:
-        self.app.ensure_locking_dependency()
-        import chat
-
-        assert chat.portalocker is not None
-        self.app.ensure_memory_paths()
         normalized_scope = self.normalize_memory_scopes([scope])[0]
-        memory_file = self.get_memory_file_for_scope(normalized_scope)
         entry.setdefault("scope", normalized_scope)
+        repo = getattr(self.app, "memory_repository", None)
+        if repo is not None:
+            return repo.append_entry(entry, normalized_scope)
+
+        self.app.ensure_locking_dependency()
+        self.app.ensure_memory_paths()
+        memory_file = self.get_memory_file_for_scope(normalized_scope)
         row = json.dumps(entry, ensure_ascii=True)
-        max_attempts = int(getattr(chat, "LOCK_MAX_ATTEMPTS", LOCK_MAX_ATTEMPTS))
-        for attempt in range(max_attempts):
-            try:
-                with chat.portalocker.Lock(
-                    str(memory_file),
-                    mode="a",
-                    timeout=LOCK_TIMEOUT_SECONDS,
-                    fail_when_locked=True,
-                    encoding="utf-8",
-                ) as f:
-                    f.write(row + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-                return True
-            except chat.portalocker.exceptions.LockException:
-                pass
-            except OSError:
-                pass
-            if attempt == max_attempts - 1:
-                break
-            delay = min(
-                LOCK_BACKOFF_MAX_SECONDS,
-                LOCK_BACKOFF_BASE_SECONDS * (2 ** min(attempt, 5)),
-            )
-            time.sleep(delay + random.uniform(0, 0.03))
-        return False
+        try:
+            with open(memory_file, "a", encoding="utf-8") as f:
+                f.write(row + "\n")
+            return True
+        except OSError:
+            return False
 
     def get_last_ai_response_event(self) -> ChatEvent | None:
         for event in reversed(self.app.message_events):
