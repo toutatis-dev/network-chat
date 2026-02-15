@@ -23,19 +23,20 @@ class ChatController:
         return getattr(self.app, item)
 
     def build_command_handlers(self) -> dict[str, Any]:
-        self.command_handlers = CommandRegistry(self.app).build()
+        self.command_handlers = CommandRegistry(self).build()
         return self.command_handlers
 
     def handle_input(self, text: str) -> None:
+        self.app.ensure_services_initialized()
         text = text.strip()
         if not text:
             return
 
-        if self.app.handle_memory_confirmation_input(text):
+        if self.app.memory_service.handle_memory_confirmation_input(text):
             self.app.input_field.text = ""
             return
 
-        if self.app.handle_playbook_confirmation_input(text):
+        if self.app.playbook_service.handle_confirmation_input(text):
             self.app.input_field.text = ""
             return
 
@@ -65,6 +66,115 @@ class ChatController:
         if self.app.write_to_file(event):
             self.app.input_field.text = ""
         else:
+            self.app.append_system_message(
+                "Error: Could not send message. Network busy or locked."
+            )
+
+    def handle_theme_command(self, args: str) -> None:
+        from huddle_chat.constants import THEMES
+
+        if not args:
+            avail = ", ".join(THEMES.keys())
+            self.app.append_system_message(f"Available themes: {avail}")
+            return
+        target = args.strip().lower()
+        if target in THEMES:
+            self.app.current_theme = target
+            self.app.save_config()
+            self.app.application.style = self.app.get_style()
+            self.app.application.invalidate()
+            return
+        self.app.append_system_message(f"Unknown theme '{target}'.")
+
+    def handle_setpath_command(self, args: str) -> None:
+        self.app.base_dir = args.strip()
+        self.app.save_config()
+        self.app.application.exit(result="restart")
+
+    def handle_status_command(self, args: str) -> None:
+        self.app.status = args[:20]
+        self.app.force_heartbeat()
+
+    def handle_rooms_command(self) -> None:
+        rooms = ", ".join(self.app.list_rooms())
+        self.app.append_system_message(f"Rooms: {rooms}")
+
+    def handle_room_command(self) -> None:
+        self.app.append_system_message(f"Current room: #{self.app.current_room}")
+
+    def handle_aiproviders_command(self) -> None:
+        self.app.ensure_services_initialized()
+        self.app.append_system_message(
+            self.app.command_ops_service.get_ai_provider_summary()
+        )
+
+    def handle_aiconfig_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.command_ops_service.handle_aiconfig_command(args)
+
+    def handle_ai_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.ai_service.handle_ai_command(args)
+
+    def handle_share_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.command_ops_service.handle_share_command(args)
+
+    def handle_agent_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.command_ops_service.handle_agent_command(args)
+
+    def handle_memory_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.memory_service.handle_memory_command(args)
+
+    def get_pending_actions_text(self) -> str:
+        self.app.ensure_services_initialized()
+        return self.app.action_service.format_pending_actions()
+
+    def prune_terminal_actions(self) -> int:
+        self.app.ensure_services_initialized()
+        return self.app.action_service.prune_terminal_actions()
+
+    def get_action_details(self, action_id: str) -> str:
+        self.app.ensure_services_initialized()
+        return self.app.action_service.get_action_details(action_id)
+
+    def decide_action(self, action_id: str, decision: str) -> tuple[bool, str]:
+        self.app.ensure_services_initialized()
+        return self.app.action_service.decide_action(action_id, decision)
+
+    def handle_toolpaths_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.command_ops_service.handle_toolpaths_command(args)
+
+    def handle_help_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.help_service.handle_help_command(args)
+
+    def handle_onboard_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.help_service.handle_onboard_command(args)
+
+    def handle_playbook_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.playbook_service.handle_playbook_command(args)
+
+    def handle_explain_command(self, args: str) -> None:
+        self.app.ensure_services_initialized()
+        self.app.explain_service.handle_explain_command(args)
+
+    def handle_clear_command(self) -> None:
+        self.app.messages = []
+        self.app.message_events = []
+        self.app.output_field.text = ""
+        self.app.search_query = ""
+        self.app.search_hits = []
+        self.app.active_search_hit_idx = -1
+
+    def handle_me_command(self, args: str) -> None:
+        event = self.app.build_event("me", args)
+        if not self.app.write_to_file(event):
             self.app.append_system_message(
                 "Error: Could not send message. Network busy or locked."
             )
@@ -207,7 +317,7 @@ class ChatController:
         self.app.active_search_hit_idx = -1
         self.app.messages = []
         self.app.message_events = []
-        self.app.load_recent_messages()
+        self.app.storage_service.load_recent_messages()
         self.refresh_presence_sidebar()
         self.app.save_config()
         self.app.signal_monitor_refresh()

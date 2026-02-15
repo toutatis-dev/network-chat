@@ -274,7 +274,7 @@ class CommandOpsService:
                 "/agent show [id], /agent memory <private,repo,team>, "
                 "/agent route <task> <provider> <model>"
             )
-            self.app.append_system_message(self.app.get_agent_status_text())
+            self.app.append_system_message(self.app.agent_service.build_status_text())
             return
 
         try:

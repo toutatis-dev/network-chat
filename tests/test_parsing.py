@@ -37,12 +37,13 @@ def app_instance(tmp_path):
     app.sidebar_control = SimpleNamespace(text=[])
     app.ensure_paths()
     app.update_room_paths()
+    app.controller = chat.ChatController(app)
     return app
 
 
 def test_handle_normal_message(app_instance):
     app_instance.write_to_file = MagicMock(return_value=True)
-    app_instance.handle_input("Hello World")
+    app_instance.controller.handle_input("Hello World")
 
     assert app_instance.write_to_file.called
     payload = app_instance.write_to_file.call_args.args[0]
@@ -53,13 +54,13 @@ def test_handle_normal_message(app_instance):
 
 def test_handle_empty_input(app_instance):
     app_instance.write_to_file = MagicMock(return_value=True)
-    app_instance.handle_input("   ")
+    app_instance.controller.handle_input("   ")
     assert not app_instance.write_to_file.called
 
 
 def test_command_me(app_instance):
     app_instance.write_to_file = MagicMock(return_value=True)
-    app_instance.handle_input("/me dances")
+    app_instance.controller.handle_input("/me dances")
     payload = app_instance.write_to_file.call_args.args[0]
     assert payload.type == "me"
     assert payload.text == "dances"
@@ -67,7 +68,7 @@ def test_command_me(app_instance):
 
 def test_command_theme_unknown(app_instance):
     app_instance.write_to_file = MagicMock(return_value=True)
-    app_instance.handle_input("/theme nonexist")
+    app_instance.controller.handle_input("/theme nonexist")
     assert "Unknown theme" in app_instance.output_field.text
 
 
@@ -76,7 +77,7 @@ def test_status_command_updates_without_spawning_thread(app_instance):
         patch("chat.Thread") as mock_thread,
         patch.object(app_instance, "force_heartbeat") as mock_force,
     ):
-        app_instance.handle_input("/status Busy")
+        app_instance.controller.handle_input("/status Busy")
 
     assert app_instance.status == "Busy"
     assert mock_force.called
@@ -84,14 +85,14 @@ def test_status_command_updates_without_spawning_thread(app_instance):
 
 
 def test_join_command_calls_switch_room(app_instance):
-    with patch.object(app_instance, "switch_room") as mock_switch:
-        app_instance.handle_input("/join dev")
+    with patch.object(app_instance.controller, "switch_room") as mock_switch:
+        app_instance.controller.handle_input("/join dev")
     mock_switch.assert_called_once_with("dev")
 
 
 def test_rooms_command_prints_rooms(app_instance):
     with patch.object(app_instance, "list_rooms", return_value=["general", "dev"]):
-        app_instance.handle_input("/rooms")
+        app_instance.controller.handle_input("/rooms")
     assert "Rooms: general, dev" in app_instance.output_field.text
 
 
@@ -101,12 +102,12 @@ def test_search_commands_set_and_clear(app_instance):
         ChatEvent(ts="1", type="chat", author="a", text="alpha"),
         ChatEvent(ts="2", type="chat", author="a", text="beta alpha"),
     ]
-    app_instance.handle_input("/search alpha")
+    app_instance.controller.handle_input("/search alpha")
     assert app_instance.search_query == "alpha"
     assert len(app_instance.search_hits) >= 2
     assert app_instance.search_hits[0:2] == [0, 1]
 
-    app_instance.handle_input("/clearsearch")
+    app_instance.controller.handle_input("/clearsearch")
     assert app_instance.search_query == ""
     assert app_instance.search_hits == []
 
@@ -119,7 +120,7 @@ def test_command_clear_resets_local_history_and_search(app_instance):
     app_instance.search_query = "msg"
     app_instance.search_hits = [0]
 
-    app_instance.handle_input("/clear")
+    app_instance.controller.handle_input("/clear")
 
     assert app_instance.messages == []
     assert app_instance.message_events == []
@@ -400,11 +401,11 @@ def test_toolpaths_add_list_remove(app_instance, tmp_path):
     app_instance.ensure_services_initialized()
     app_instance.save_config = MagicMock()
     target = str(tmp_path.resolve())
-    app_instance.handle_input(f'/toolpaths add "{target}"')
+    app_instance.controller.handle_input(f'/toolpaths add "{target}"')
     assert "Added tool path" in app_instance.output_field.text
 
-    app_instance.handle_input("/toolpaths list")
+    app_instance.controller.handle_input("/toolpaths list")
     assert target in app_instance.output_field.text
 
-    app_instance.handle_input(f'/toolpaths remove "{target}"')
+    app_instance.controller.handle_input(f'/toolpaths remove "{target}"')
     assert "Removed tool path" in app_instance.output_field.text

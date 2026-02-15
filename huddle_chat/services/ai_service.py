@@ -187,7 +187,7 @@ class AIService:
         on_token: Callable[[str], None] | None = None,
     ) -> tuple[str | None, str | None]:
         self.app.ensure_ai_state_initialized()
-        if self.app.is_ai_request_cancelled(request_id):
+        if self.app.controller.is_ai_request_cancelled(request_id):
             return None, "AI request cancelled."
         try:
             answer, call_error = self._call_provider_interruptible(
@@ -204,7 +204,7 @@ class AIService:
             assert answer is not None
             return answer, None
         except Exception as exc:
-            if self.app.is_ai_request_cancelled(request_id):
+            if self.app.controller.is_ai_request_cancelled(request_id):
                 return None, "AI request cancelled."
             if not self.is_transient_ai_error(exc):
                 return None, f"AI request failed: {exc}"
@@ -212,11 +212,11 @@ class AIService:
             with self.app.ai_state_lock:
                 if self.app.ai_active_request_id == request_id:
                     self.app.ai_retry_count = 1
-            self.app.set_ai_preview_text(
+            self.app.controller.set_ai_preview_text(
                 request_id, "retrying after transient error..."
             )
             time.sleep(AI_RETRY_BACKOFF_SECONDS)
-            if self.app.is_ai_request_cancelled(request_id):
+            if self.app.controller.is_ai_request_cancelled(request_id):
                 return None, "AI request cancelled."
             try:
                 answer, retry_error = self._call_provider_interruptible(
@@ -273,7 +273,7 @@ class AIService:
 
         Thread(target=worker, daemon=True).start()
         while not finished.wait(0.1):
-            if self.app.is_ai_request_cancelled(request_id):
+            if self.app.controller.is_ai_request_cancelled(request_id):
                 return None, RuntimeError("AI request cancelled.")
         return result.get("answer"), result.get("error")
 
@@ -291,10 +291,10 @@ class AIService:
     def handle_ai_command(self, args: str) -> None:
         lowered = args.strip().lower()
         if lowered == "status":
-            self.app.append_system_message(self.app.build_ai_status_text())
+            self.app.append_system_message(self.app.controller.build_ai_status_text())
             return
         if lowered == "cancel":
-            if self.app.request_ai_cancel():
+            if self.app.controller.request_ai_cancel():
                 self.app.append_system_message("AI cancellation requested.")
             else:
                 self.app.append_system_message("No active AI request.")
@@ -312,7 +312,7 @@ class AIService:
             return
 
         task_class = self.classify_task(parsed.prompt)
-        route, route_error = self.app.resolve_route(
+        route, route_error = self.app.routing_service.resolve_route(
             task_class=task_class,
             provider_override=parsed.provider_override,
             model_override=parsed.model_override,
@@ -331,7 +331,7 @@ class AIService:
         scope = "private" if is_private else "room"
         memory_scopes = parsed.memory_scope_override or []
         if not memory_scopes:
-            profile = self.app.get_active_agent_profile()
+            profile = self.app.agent_service.get_active_profile()
             memory_policy = profile.memory_policy
             configured_scopes = memory_policy.scopes
             if isinstance(configured_scopes, list):
@@ -345,7 +345,7 @@ class AIService:
         if not memory_scopes:
             memory_scopes = ["team"]
 
-        request_id = self.app.start_ai_request_state(
+        request_id = self.app.controller.start_ai_request_state(
             provider=provider, model=model, target_room=target_room, scope=scope
         )
         if request_id is None:
@@ -363,7 +363,7 @@ class AIService:
         prompt_event.model = model
         prompt_event.request_id = request_id
         if not self.app.write_to_file(prompt_event, room=target_room):
-            self.app.clear_ai_request_state(request_id)
+            self.app.controller.clear_ai_request_state(request_id)
             self.app.append_system_message("Error: Failed to persist AI prompt.")
             return
 
@@ -388,7 +388,7 @@ class AIService:
             ),
         ).start()
         self.create_thread(
-            target=self.app.run_ai_preview_pulse, args=(request_id,)
+            target=self.app.controller.run_ai_preview_pulse, args=(request_id,)
         ).start()
 
     def process_ai_response(
@@ -408,7 +408,7 @@ class AIService:
         memory_ids_used: list[str] = []
         memory_topics_used: list[str] = []
         if not disable_memory:
-            rerank_route, _ = self.app.resolve_route(
+            rerank_route, _ = self.app.routing_service.resolve_route(
                 task_class="memory_rerank",
                 provider_override=None,
                 model_override=None,
@@ -420,19 +420,23 @@ class AIService:
                     "api_key": rerank_route.api_key,
                     "model": rerank_route.model,
                 }
-            selected_memory, memory_warning = self.app.select_memory_for_prompt(
-                prompt=prompt,
-                provider_cfg={
-                    "provider": provider,
-                    "api_key": api_key,
-                    "model": model,
-                },
-                scopes=memory_scopes,
-                rerank_provider_cfg=rerank_provider_cfg,
+            selected_memory, memory_warning = (
+                self.app.memory_service.select_memory_for_prompt(
+                    prompt=prompt,
+                    provider_cfg={
+                        "provider": provider,
+                        "api_key": api_key,
+                        "model": model,
+                    },
+                    scopes=memory_scopes,
+                    rerank_provider_cfg=rerank_provider_cfg,
+                )
             )
             if memory_warning:
                 self.app.append_system_message(memory_warning)
-            memory_context = self.app.build_memory_context_block(selected_memory)
+            memory_context = self.app.memory_service.build_memory_context_block(
+                selected_memory
+            )
             if memory_context:
                 effective_prompt = f"{memory_context}\n\nUser prompt:\n{prompt}"
             memory_ids_used = [
@@ -465,14 +469,14 @@ class AIService:
                 self.app.append_system_message(
                     f"AI request failed in #ai-dm: {error_text}"
                 )
-            self.app.clear_ai_request_state(request_id)
+            self.app.controller.clear_ai_request_state(request_id)
             self.app.refresh_output_from_events()
             return
         assert answer is not None
 
         action_warning: str | None = None
         action_ids: list[str] = []
-        if action_mode and not self.app.is_ai_request_cancelled(request_id):
+        if action_mode and not self.app.controller.is_ai_request_cancelled(request_id):
             tools_json = self.app.tool_service.build_tools_prompt_block()
             action_prompt = (
                 "Return strict JSON only with keys: answer, proposed_actions. "
@@ -515,11 +519,11 @@ class AIService:
                     elif not action_warning:
                         action_warning = result
 
-        if self.app.is_ai_request_cancelled(request_id):
+        if self.app.controller.is_ai_request_cancelled(request_id):
             canceled_event = self.app.build_event("system", "AI request cancelled.")
             canceled_event.request_id = request_id
             self.app.write_to_file(canceled_event, room=target_room)
-            self.app.clear_ai_request_state(request_id)
+            self.app.controller.clear_ai_request_state(request_id)
             self.app.refresh_output_from_events()
             return
 
@@ -531,11 +535,11 @@ class AIService:
             response_event.memory_ids_used = memory_ids_used
             response_event.memory_topics_used = memory_topics_used
         if not self.app.write_to_file(response_event, room=target_room):
-            self.app.clear_ai_request_state(request_id)
+            self.app.controller.clear_ai_request_state(request_id)
             self.app.append_system_message("Error: Failed to persist AI response.")
             return
 
-        ids_line = self.app.format_memory_ids_line(memory_ids_used)
+        ids_line = self.app.memory_service.format_memory_ids_line(memory_ids_used)
         if ids_line:
             memory_event = self.app.build_event("system", ids_line)
             memory_event.request_id = request_id
@@ -556,7 +560,7 @@ class AIService:
             self.app.append_system_message(
                 "Private AI response saved to #ai-dm. Use /join ai-dm to review."
             )
-        self.app.clear_ai_request_state(request_id)
+        self.app.controller.clear_ai_request_state(request_id)
         self.app.refresh_output_from_events()
 
     def _build_stream_preview_handler(self, request_id: str) -> Callable[[str], None]:
@@ -565,7 +569,7 @@ class AIService:
 
         def on_token(token: str) -> None:
             nonlocal last_emit
-            if self.app.is_ai_request_cancelled(request_id):
+            if self.app.controller.is_ai_request_cancelled(request_id):
                 return
             chunks.append(token)
             now = time.monotonic()
@@ -574,6 +578,6 @@ class AIService:
             last_emit = now
             preview = "".join(chunks).strip()
             if preview:
-                self.app.set_ai_preview_text(request_id, preview)
+                self.app.controller.set_ai_preview_text(request_id, preview)
 
         return on_token

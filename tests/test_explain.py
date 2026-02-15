@@ -59,6 +59,7 @@ def build_explain_app(tmp_path: Path) -> chat.ChatApp:
     app.ensure_memory_paths()
     app.ensure_agent_paths()
     app.update_room_paths()
+    app.controller = chat.ChatController(app)
     app.get_onboarding_state_path = (
         lambda: tmp_path / ".local_chat" / "onboarding_state.json"
     )
@@ -67,7 +68,7 @@ def build_explain_app(tmp_path: Path) -> chat.ChatApp:
 
 def test_explain_action_outputs_concise_summary(tmp_path):
     app = build_explain_app(tmp_path)
-    app.handle_input("/explain action ab12cd34")
+    app.controller.handle_input("/explain action ab12cd34")
     assert "Action ab12cd34" in app.output_field.text
     assert "status=pending" in app.output_field.text
     assert "Next:" in app.output_field.text
@@ -75,7 +76,7 @@ def test_explain_action_outputs_concise_summary(tmp_path):
 
 def test_explain_agent_outputs_profile_context(tmp_path):
     app = build_explain_app(tmp_path)
-    app.handle_input("/explain agent")
+    app.controller.handle_input("/explain agent")
     assert "Agent profile=" in app.output_field.text
     assert "memory_scopes=" in app.output_field.text
     assert "tool_policy" in app.output_field.text
@@ -83,7 +84,7 @@ def test_explain_agent_outputs_profile_context(tmp_path):
 
 def test_explain_tool_outputs_constraints(tmp_path):
     app = build_explain_app(tmp_path)
-    app.handle_input("/explain tool run_tests")
+    app.controller.handle_input("/explain tool run_tests")
     assert "Tool run_tests" in app.output_field.text
     assert "requires_approval" in app.output_field.text
     assert "allowed_by_agent_policy=" in app.output_field.text

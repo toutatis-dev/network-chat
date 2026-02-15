@@ -1090,42 +1090,9 @@ class ChatApp:
 
         return self.apply_search_highlight([("", line_text)], self.search_query)
 
-    def switch_room(self, target_room: str) -> None:
-        if not hasattr(self, "controller"):
-            self.controller = ChatController(self)
-        self.controller.switch_room(target_room)
-
-    def load_recent_messages(self) -> None:
-        self.ensure_services_initialized()
-        self.storage_service.load_recent_messages()
-
-    def get_ai_provider_summary(self) -> str:
-        self.ensure_services_initialized()
-        return self.command_ops_service.get_ai_provider_summary()
-
-    def handle_aiconfig_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.command_ops_service.handle_aiconfig_command(args)
-
-    def parse_share_selector(self, selector: str) -> list[ChatEvent]:
-        self.ensure_services_initialized()
-        return self.command_ops_service.parse_share_selector(selector)
-
-    def handle_share_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.command_ops_service.handle_share_command(args)
-
     def get_active_agent_profile(self) -> AgentProfile:
         self.ensure_services_initialized()
         return self.agent_service.get_active_profile()
-
-    def get_agent_status_text(self) -> str:
-        self.ensure_services_initialized()
-        return self.agent_service.build_status_text()
-
-    def handle_agent_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.command_ops_service.handle_agent_command(args)
 
     def resolve_route(
         self,
@@ -1166,46 +1133,6 @@ class ChatApp:
             ttl_seconds=ttl_seconds,
             expires_at=expires_at,
         )
-
-    def decide_action(self, action_id: str, decision: str) -> tuple[bool, str]:
-        self.ensure_services_initialized()
-        return self.action_service.decide_action(action_id, decision)
-
-    def get_pending_actions_text(self) -> str:
-        self.ensure_services_initialized()
-        return self.action_service.format_pending_actions()
-
-    def prune_terminal_actions(self) -> int:
-        self.ensure_services_initialized()
-        return self.action_service.prune_terminal_actions()
-
-    def get_action_details(self, action_id: str) -> str:
-        self.ensure_services_initialized()
-        return self.action_service.get_action_details(action_id)
-
-    def handle_toolpaths_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.command_ops_service.handle_toolpaths_command(args)
-
-    def handle_help_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.help_service.handle_help_command(args)
-
-    def handle_onboard_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.help_service.handle_onboard_command(args)
-
-    def handle_playbook_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.playbook_service.handle_playbook_command(args)
-
-    def handle_explain_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.explain_service.handle_explain_command(args)
-
-    def handle_playbook_confirmation_input(self, text: str) -> bool:
-        self.ensure_services_initialized()
-        return self.playbook_service.handle_confirmation_input(text)
 
     def get_tool_paths(self) -> list[str]:
         paths: list[str] = []
@@ -1345,14 +1272,6 @@ class ChatApp:
         self.ensure_services_initialized()
         self.memory_service.confirm_memory_draft()
 
-    def handle_memory_confirmation_input(self, text: str) -> bool:
-        self.ensure_services_initialized()
-        return self.memory_service.handle_memory_confirmation_input(text)
-
-    def handle_memory_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.memory_service.handle_memory_command(args)
-
     def is_transient_ai_error(self, exc: Exception) -> bool:
         self.ensure_services_initialized()
         return self.ai_service.is_transient_ai_error(exc)
@@ -1400,69 +1319,6 @@ class ChatApp:
         if not hasattr(self, "controller"):
             self.controller = ChatController(self)
         self.controller.run_ai_preview_pulse(request_id)
-
-    def run_ai_request_with_retry(
-        self,
-        request_id: str,
-        provider: str,
-        api_key: str,
-        model: str,
-        prompt: str,
-        *,
-        stream: bool = False,
-        on_token: Callable[[str], None] | None = None,
-    ) -> tuple[str | None, str | None]:
-        self.ensure_services_initialized()
-        return self.ai_service.run_ai_request_with_retry(
-            request_id,
-            provider,
-            api_key,
-            model,
-            prompt,
-            stream=stream,
-            on_token=on_token,
-        )
-
-    def handle_ai_command(self, args: str) -> None:
-        self.ensure_services_initialized()
-        self.ai_service.handle_ai_command(args)
-
-    def process_ai_response(
-        self,
-        request_id: str,
-        provider: str,
-        api_key: str,
-        model: str,
-        prompt: str,
-        target_room: str,
-        is_private: bool,
-        disable_memory: bool,
-        action_mode: bool,
-        memory_scopes: list[str],
-    ) -> None:
-        self.ensure_services_initialized()
-        self.ai_service.process_ai_response(
-            request_id,
-            provider,
-            api_key,
-            model,
-            prompt,
-            target_room,
-            is_private,
-            disable_memory,
-            action_mode,
-            memory_scopes,
-        )
-
-    def build_command_handlers(self) -> dict[str, Any]:
-        if not hasattr(self, "controller"):
-            self.controller = ChatController(self)
-        return self.controller.build_command_handlers()
-
-    def handle_input(self, text: str) -> None:
-        if not hasattr(self, "controller"):
-            self.controller = ChatController(self)
-        self.controller.handle_input(text)
 
     def write_to_file(
         self, payload: dict[str, Any] | str | ChatEvent, room: str | None = None
@@ -1519,7 +1375,7 @@ class ChatApp:
         if self.color == "white" and "white" in taken:
             self.color = COLORS[hash(self.name) % len(COLORS)]
 
-        self.load_recent_messages()
+        self.storage_service.load_recent_messages()
 
         self.start_file_watcher()
         Thread(target=self.heartbeat, daemon=True).start()

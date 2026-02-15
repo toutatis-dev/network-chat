@@ -114,7 +114,7 @@ class PlaybookService:
                 return
 
             self.app.append_system_message(f"Auto-running: {command}")
-            self.app.handle_input(command)
+            self.app.controller.handle_input(command)
             state["step_index"] = idx + 1
 
     def handle_confirmation_input(self, text: str) -> bool:
@@ -138,7 +138,7 @@ class PlaybookService:
         command = str(state.get("pending_command", "")).strip()
         if command:
             self.app.append_system_message(f"Confirmed. Running: {command}")
-            self.app.handle_input(command)
+            self.app.controller.handle_input(command)
 
         state["awaiting_confirmation"] = False
         state["pending_command"] = ""
@@ -189,7 +189,7 @@ class PlaybookService:
                     f"Unknown playbook '{tokens[1]}'. Run /playbook list."
                 )
                 return
-            if self.app.is_ai_request_active():
+            if self.app.controller.is_ai_request_active():
                 self.app.append_system_message(
                     "Cannot start playbook run while AI request is active. Use /ai status or /ai cancel first."
                 )

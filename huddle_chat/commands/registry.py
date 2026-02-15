@@ -1,14 +1,12 @@
 from typing import TYPE_CHECKING, Any
 
-from huddle_chat.constants import THEMES
-
 if TYPE_CHECKING:
-    from chat import ChatApp
+    from huddle_chat.controller import ChatController
 
 
 class CommandRegistry:
-    def __init__(self, app: "ChatApp"):
-        self.app = app
+    def __init__(self, controller: "ChatController"):
+        self.controller = controller
 
     def build(self) -> dict[str, Any]:
         return {
@@ -45,154 +43,136 @@ class CommandRegistry:
         }
 
     def command_theme(self, args: str) -> None:
-        if not args:
-            avail = ", ".join(THEMES.keys())
-            self.app.append_system_message(f"Available themes: {avail}")
-            return
-        target = args.strip().lower()
-        if target in THEMES:
-            self.app.current_theme = target
-            self.app.save_config()
-            self.app.application.style = self.app.get_style()
-            self.app.application.invalidate()
-            return
-        self.app.append_system_message(f"Unknown theme '{target}'.")
+        self.controller.handle_theme_command(args)
 
     def command_setpath(self, args: str) -> None:
-        self.app.base_dir = args.strip()
-        self.app.save_config()
-        self.app.application.exit(result="restart")
+        self.controller.handle_setpath_command(args)
 
     def command_status(self, args: str) -> None:
-        self.app.status = args[:20]
-        self.app.force_heartbeat()
+        self.controller.handle_status_command(args)
 
     def command_join(self, args: str) -> None:
         if not args.strip():
-            self.app.append_system_message("Usage: /join <room>")
+            self.controller.app.append_system_message("Usage: /join <room>")
             return
-        self.app.switch_room(args.strip())
+        self.controller.switch_room(args.strip())
 
     def command_rooms(self, _args: str) -> None:
-        rooms = ", ".join(self.app.list_rooms())
-        self.app.append_system_message(f"Rooms: {rooms}")
+        self.controller.handle_rooms_command()
 
     def command_room(self, _args: str) -> None:
-        self.app.append_system_message(f"Current room: #{self.app.current_room}")
+        self.controller.handle_room_command()
 
     def command_aiproviders(self, _args: str) -> None:
-        self.app.append_system_message(self.app.get_ai_provider_summary())
+        self.controller.handle_aiproviders_command()
 
     def command_aiconfig(self, args: str) -> None:
-        self.app.handle_aiconfig_command(args)
+        self.controller.handle_aiconfig_command(args)
 
     def command_ai(self, args: str) -> None:
-        self.app.handle_ai_command(args)
+        self.controller.handle_ai_command(args)
 
     def command_ask(self, args: str) -> None:
-        self.app.handle_ai_command(args)
+        self.controller.handle_ai_command(args)
 
     def command_share(self, args: str) -> None:
-        self.app.handle_share_command(args)
+        self.controller.handle_share_command(args)
 
     def command_agent(self, args: str) -> None:
-        self.app.handle_agent_command(args)
+        self.controller.handle_agent_command(args)
 
     def command_memory(self, args: str) -> None:
-        self.app.handle_memory_command(args)
+        self.controller.handle_memory_command(args)
 
     def command_actions(self, args: str) -> None:
         sub = args.strip().lower()
         if sub == "prune":
-            removed = self.app.prune_terminal_actions()
-            self.app.append_system_message(f"Pruned {removed} terminal action(s).")
+            removed = self.controller.prune_terminal_actions()
+            self.controller.app.append_system_message(
+                f"Pruned {removed} terminal action(s)."
+            )
             return
-        self.app.append_system_message(self.app.get_pending_actions_text())
+        self.controller.app.append_system_message(
+            self.controller.get_pending_actions_text()
+        )
 
     def command_action(self, args: str) -> None:
         action_id = args.strip()
         if not action_id:
-            self.app.append_system_message("Usage: /action <action-id>")
+            self.controller.app.append_system_message("Usage: /action <action-id>")
             return
-        self.app.append_system_message(self.app.get_action_details(action_id))
+        self.controller.app.append_system_message(
+            self.controller.get_action_details(action_id)
+        )
 
     def command_approve(self, args: str) -> None:
         action_id = args.strip()
         if not action_id:
-            self.app.append_system_message("Usage: /approve <action-id>")
+            self.controller.app.append_system_message("Usage: /approve <action-id>")
             return
-        ok, msg = self.app.decide_action(action_id, "approved")
-        self.app.append_system_message(msg)
+        ok, msg = self.controller.decide_action(action_id, "approved")
+        self.controller.app.append_system_message(msg)
         if ok:
-            self.app.refresh_output_from_events()
+            self.controller.refresh_output_from_events()
 
     def command_deny(self, args: str) -> None:
         action_id = args.strip()
         if not action_id:
-            self.app.append_system_message("Usage: /deny <action-id>")
+            self.controller.app.append_system_message("Usage: /deny <action-id>")
             return
-        ok, msg = self.app.decide_action(action_id, "denied")
-        self.app.append_system_message(msg)
+        ok, msg = self.controller.decide_action(action_id, "denied")
+        self.controller.app.append_system_message(msg)
         if ok:
-            self.app.refresh_output_from_events()
+            self.controller.refresh_output_from_events()
 
     def command_toolpaths(self, args: str) -> None:
-        self.app.handle_toolpaths_command(args)
+        self.controller.handle_toolpaths_command(args)
 
     def command_search(self, args: str) -> None:
         query = args.strip()
-        self.app.search_query = query
-        self.app.rebuild_search_hits()
+        self.controller.app.search_query = query
+        self.controller.rebuild_search_hits()
         if not query:
-            self.app.append_system_message("Search cleared.")
-        elif self.app.search_hits:
-            self.app.append_system_message(
-                f"Found {len(self.app.search_hits)} matches for '{query}'."
+            self.controller.app.append_system_message("Search cleared.")
+        elif self.controller.app.search_hits:
+            self.controller.app.append_system_message(
+                f"Found {len(self.controller.app.search_hits)} matches for '{query}'."
             )
-            self.app.jump_to_search_hit(0)
+            self.controller.jump_to_search_hit(0)
         else:
-            self.app.append_system_message(f"No matches for '{query}'.")
+            self.controller.app.append_system_message(f"No matches for '{query}'.")
 
     def command_next(self, _args: str) -> None:
-        if not self.app.jump_to_search_hit(1):
-            self.app.append_system_message("No search matches.")
+        if not self.controller.jump_to_search_hit(1):
+            self.controller.app.append_system_message("No search matches.")
 
     def command_prev(self, _args: str) -> None:
-        if not self.app.jump_to_search_hit(-1):
-            self.app.append_system_message("No search matches.")
+        if not self.controller.jump_to_search_hit(-1):
+            self.controller.app.append_system_message("No search matches.")
 
     def command_clearsearch(self, _args: str) -> None:
-        self.app.search_query = ""
-        self.app.search_hits = []
-        self.app.active_search_hit_idx = -1
-        self.app.append_system_message("Search cleared.")
+        self.controller.app.search_query = ""
+        self.controller.app.search_hits = []
+        self.controller.app.active_search_hit_idx = -1
+        self.controller.app.append_system_message("Search cleared.")
 
     def command_help(self, args: str) -> None:
-        self.app.handle_help_command(args)
+        self.controller.handle_help_command(args)
 
     def command_onboard(self, args: str) -> None:
-        self.app.handle_onboard_command(args)
+        self.controller.handle_onboard_command(args)
 
     def command_playbook(self, args: str) -> None:
-        self.app.handle_playbook_command(args)
+        self.controller.handle_playbook_command(args)
 
     def command_explain(self, args: str) -> None:
-        self.app.handle_explain_command(args)
+        self.controller.handle_explain_command(args)
 
     def command_exit(self, _args: str) -> None:
-        self.app.application.exit()
+        self.controller.app.application.exit()
 
     def command_clear(self, _args: str) -> None:
-        self.app.messages = []
-        self.app.message_events = []
-        self.app.output_field.text = ""
-        self.app.search_query = ""
-        self.app.search_hits = []
-        self.app.active_search_hit_idx = -1
+        self.controller.handle_clear_command()
 
     def command_me(self, args: str) -> None:
-        event = self.app.build_event("me", args)
-        if not self.app.write_to_file(event):
-            self.app.append_system_message(
-                "Error: Could not send message. Network busy or locked."
-            )
+        self.controller.handle_me_command(args)

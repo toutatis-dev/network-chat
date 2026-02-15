@@ -63,6 +63,7 @@ def build_runtime_app(tmp_path: Path) -> chat.ChatApp:
     app.ensure_locking_dependency = lambda: None
     app.ensure_paths()
     app.update_room_paths()
+    app.controller = chat.ChatController(app)
     return app
 
 
@@ -233,10 +234,10 @@ def test_message_flow_and_room_isolation(tmp_path, monkeypatch):
     app = build_runtime_app(tmp_path)
     monkeypatch.setattr(chat, "portalocker", FakePortalocker())
 
-    app.handle_input("hello general")
+    app.controller.handle_input("hello general")
 
-    app.switch_room("dev")
-    app.handle_input("hello dev")
+    app.controller.switch_room("dev")
+    app.controller.handle_input("hello dev")
 
     general_rows = (
         app.get_message_file("general").read_text(encoding="utf-8").strip().splitlines()
@@ -266,7 +267,8 @@ def test_load_recent_messages_uses_tail_for_large_history(tmp_path):
             }
             f.write(json.dumps(row) + "\n")
 
-    app.load_recent_messages()
+    app.ensure_services_initialized()
+    app.storage_service.load_recent_messages()
 
     assert len(app.message_events) == chat.MAX_MESSAGES
     assert app.message_events[0].text == "line-25"

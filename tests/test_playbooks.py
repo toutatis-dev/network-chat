@@ -48,6 +48,7 @@ def build_playbook_app(tmp_path: Path) -> chat.ChatApp:
     app.ensure_memory_paths()
     app.ensure_agent_paths()
     app.update_room_paths()
+    app.controller = chat.ChatController(app)
     app.get_onboarding_state_path = (
         lambda: tmp_path / ".local_chat" / "onboarding_state.json"
     )
@@ -56,32 +57,32 @@ def build_playbook_app(tmp_path: Path) -> chat.ChatApp:
 
 def test_playbook_list_and_show(tmp_path):
     app = build_playbook_app(tmp_path)
-    app.handle_input("/playbook list")
+    app.controller.handle_input("/playbook list")
     assert "Available playbooks:" in app.output_field.text
     assert "code-task" in app.output_field.text
 
-    app.handle_input("/playbook show code-task")
+    app.controller.handle_input("/playbook show code-task")
     assert "Playbook: code-task" in app.output_field.text
     assert "Steps:" in app.output_field.text
 
 
 def test_playbook_run_requires_confirmation_for_mutating_step(tmp_path):
     app = build_playbook_app(tmp_path)
-    app.handle_input("/playbook run code-task")
+    app.controller.handle_input("/playbook run code-task")
     assert "Playbook 'code-task' started" in app.output_field.text
     assert "Confirmation required for mutating step" in app.output_field.text
 
 
 def test_playbook_run_cancel_with_n(tmp_path):
     app = build_playbook_app(tmp_path)
-    app.handle_input("/playbook run code-task")
-    app.handle_input("n")
+    app.controller.handle_input("/playbook run code-task")
+    app.controller.handle_input("n")
     assert "Playbook cancelled at step" in app.output_field.text
 
 
 def test_playbook_run_confirm_with_y_advances(tmp_path):
     app = build_playbook_app(tmp_path)
-    app.handle_input("/playbook run code-task")
-    app.handle_input("y")
+    app.controller.handle_input("/playbook run code-task")
+    app.controller.handle_input("y")
     assert "Confirmed. Running:" in app.output_field.text
     assert "Manual input required" in app.output_field.text

@@ -62,6 +62,7 @@ def build_ai_app(tmp_path: Path) -> chat.ChatApp:
     app.ensure_paths()
     app.ensure_local_paths()
     app.update_room_paths()
+    app.controller = chat.ChatController(app)
     return app
 
 
@@ -97,7 +98,7 @@ def test_aiconfig_set_key_updates_local_config(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}
     app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
-    app.handle_aiconfig_command("set-key gemini NEWKEY")
+    app.controller.handle_aiconfig_command("set-key gemini NEWKEY")
     assert app.ai_config["providers"]["gemini"]["api_key"] == "NEWKEY"
     assert called["saved"] == 1
 
@@ -106,7 +107,7 @@ def test_aiconfig_set_key_accepts_provider_first_syntax(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}
     app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
-    app.handle_aiconfig_command("gemini set-key NEWKEY")
+    app.controller.handle_aiconfig_command("gemini set-key NEWKEY")
     assert app.ai_config["providers"]["gemini"]["api_key"] == "NEWKEY"
     assert called["saved"] == 1
 
@@ -115,7 +116,7 @@ def test_aiconfig_streaming_on_updates_local_config(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}
     app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
-    app.handle_aiconfig_command("streaming on")
+    app.controller.handle_aiconfig_command("streaming on")
     assert app.ai_config["streaming"]["enabled"] is True
     assert called["saved"] == 1
 
@@ -124,7 +125,7 @@ def test_aiconfig_streaming_provider_toggle_updates_local_config(tmp_path):
     app = build_ai_app(tmp_path)
     called = {"saved": 0}
     app.save_ai_config_data = lambda: called.__setitem__("saved", called["saved"] + 1)
-    app.handle_aiconfig_command("streaming provider openai off")
+    app.controller.handle_aiconfig_command("streaming provider openai off")
     assert app.ai_config["streaming"]["providers"]["openai"] is False
     assert called["saved"] == 1
 
@@ -149,7 +150,7 @@ def test_ai_private_targets_local_dm_room(tmp_path):
             start=lambda: target(*args)
         ),
     ):
-        app.handle_ai_command("--private hello from private")
+        app.controller.handle_ai_command("--private hello from private")
     assert len(written) == 2
     assert written[0][0] == "ai-dm"
     assert written[1][0] == "ai-dm"
@@ -193,12 +194,12 @@ def test_ai_dm_renders_share_indexes(tmp_path):
 
 def test_ai_status_and_cancel_messages(tmp_path):
     app = build_ai_app(tmp_path)
-    app.handle_ai_command("status")
+    app.controller.handle_ai_command("status")
     assert "No active AI request" in app.output_field.text
 
     app.ai_active_request_id = "abc123"
     app.ai_cancel_event = Event()
-    app.handle_ai_command("cancel")
+    app.controller.handle_ai_command("cancel")
     assert "AI cancellation requested" in app.output_field.text
     assert app.ai_cancel_event.is_set()
 
@@ -207,7 +208,7 @@ def test_ai_busy_rejects_new_request(tmp_path):
     app = build_ai_app(tmp_path)
     app.ai_active_request_id = "busy123"
     app.ai_cancel_event = Event()
-    app.handle_ai_command("hello while busy")
+    app.controller.handle_ai_command("hello while busy")
     assert "Problem: AI busy: another request is active." in app.output_field.text
 
 
@@ -225,7 +226,7 @@ def test_memory_add_creates_confirm_draft_from_last_ai_response(tmp_path):
     app.call_ai_provider = lambda **kwargs: (
         '{"summary":"Use runbook A for deploys.","topic":"deploy","confidence":"high","tags":["runbook"]}'
     )
-    app.handle_memory_command("add")
+    app.controller.handle_memory_command("add")
     assert app.memory_draft_active is True
     assert app.memory_draft_mode == "confirm"
     assert app.memory_draft["topic"] == "deploy"
@@ -252,7 +253,7 @@ def test_memory_confirm_writes_entry_and_clears_draft(tmp_path):
         return True
 
     app.write_memory_entry = fake_write_memory_entry
-    app.handle_memory_command("confirm")
+    app.controller.handle_memory_command("confirm")
     assert written["count"] == 1
     assert app.memory_draft_active is False
     assert "Memory saved:" in app.output_field.text
@@ -271,9 +272,9 @@ def test_memory_reject_enters_edit_mode_and_edit_updates_field(tmp_path):
         "origin_event_ref": "1",
         "tags": [],
     }
-    app.handle_input("n")
+    app.controller.handle_input("n")
     assert app.memory_draft_mode == "edit"
-    app.handle_memory_command("edit summary updated summary")
+    app.controller.handle_memory_command("edit summary updated summary")
     assert app.memory_draft["summary"] == "updated summary"
 
 
@@ -286,7 +287,7 @@ def test_process_ai_response_wrapper_forwards_updated_signature(tmp_path):
         captured["args"] = args
 
     app.ai_service.process_ai_response = fake_process_ai_response
-    app.process_ai_response(
+    app.ai_service.process_ai_response(
         "req123",
         "gemini",
         "key",
@@ -344,7 +345,7 @@ def test_ai_uses_memory_and_persists_citations(tmp_path):
             start=lambda: target(*args)
         ),
     ):
-        app.handle_ai_command("how do we rollback deploy?")
+        app.controller.handle_ai_command("how do we rollback deploy?")
 
     assert any("Shared memory context" in prompt for prompt in prompts)
     assert len(written) == 3
@@ -392,7 +393,7 @@ def test_ai_no_memory_flag_bypasses_memory_retrieval(tmp_path):
             start=lambda: target(*args)
         ),
     ):
-        app.handle_ai_command("--no-memory plain prompt")
+        app.controller.handle_ai_command("--no-memory plain prompt")
 
     assert len(prompts) == 1
     assert prompts[0] == "plain prompt"
@@ -436,7 +437,7 @@ def test_ai_rerank_failure_falls_back_to_lexical(tmp_path):
             start=lambda: target(*args)
         ),
     ):
-        app.handle_ai_command("how to rollback deploy")
+        app.controller.handle_ai_command("how to rollback deploy")
 
     assert (
         "Memory rerank unavailable; using lexical memory selection."
@@ -468,7 +469,7 @@ def test_memory_add_warns_on_duplicates(tmp_path):
             "source": "room:general ts:0",
         }
     ]
-    app.handle_memory_command("add")
+    app.controller.handle_memory_command("add")
     assert "Potential duplicate memory entries:" in app.output_field.text
     assert "mem_old" in app.output_field.text
 
@@ -496,7 +497,7 @@ def test_memory_confirm_warns_on_duplicates(tmp_path):
         }
     ]
     app.write_memory_entry = lambda entry, scope="team": True
-    app.handle_memory_command("confirm")
+    app.controller.handle_memory_command("confirm")
     assert "Potential duplicate memory entries:" in app.output_field.text
     assert "Memory saved:" in app.output_field.text
 
@@ -524,7 +525,7 @@ def test_run_ai_request_with_retry_interrupts_on_cancel(tmp_path):
 
     threading.Thread(target=trigger_cancel, daemon=True).start()
     started = time.monotonic()
-    answer, err = app.run_ai_request_with_retry(
+    answer, err = app.ai_service.run_ai_request_with_retry(
         request_id=request_id,
         provider="gemini",
         api_key="k",
@@ -567,7 +568,7 @@ def test_ai_streaming_uses_stream_provider_and_persists_final_response_only(tmp_
             start=lambda: target(*args)
         ),
     ):
-        app.handle_ai_command("--no-memory say hello")
+        app.controller.handle_ai_command("--no-memory say hello")
 
     assert stream_calls["count"] == 1
     assert [entry[1]["type"] for entry in written] == ["ai_prompt", "ai_response"]
@@ -608,7 +609,7 @@ def test_ai_streaming_cancel_does_not_persist_partial_response(tmp_path):
         app.request_ai_cancel()
 
     threading.Thread(target=trigger_cancel, daemon=True).start()
-    app.process_ai_response(
+    app.ai_service.process_ai_response(
         request_id=request_id,
         provider="gemini",
         api_key="k",
