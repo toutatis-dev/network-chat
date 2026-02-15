@@ -1,5 +1,6 @@
 colorama==0.4.6
 google-genai
+dependency-injector
 markdown-it-py==4.0.0
 mdurl==0.1.2
 openai

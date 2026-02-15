@@ -41,7 +41,7 @@ def ensure_venv(base_dir: Path, requirements_file: Path) -> Path:
             [
                 str(venv_python),
                 "-c",
-                "import prompt_toolkit, portalocker, watchdog, huddle_chat.ui",
+                "import prompt_toolkit, portalocker, watchdog, dependency_injector, huddle_chat.ui",
             ],
             quiet=True,
         )

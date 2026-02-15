@@ -40,8 +40,7 @@ from huddle_chat.constants import (
     THEMES,
 )
 from huddle_chat.controller import ChatController
-from huddle_chat.event_bus import EventBus
-from huddle_chat.providers import GeminiClient, OpenAIClient, ProviderClient
+from huddle_chat.providers import GeminiClient, OpenAIClient
 from huddle_chat.repositories import (
     ActionRepository,
     AgentRepository,
@@ -65,7 +64,6 @@ from huddle_chat.services import (
     ToolService,
 )
 from huddle_chat.state import AppState
-from huddle_chat.view import PromptToolkitView
 from huddle_chat.models import AgentProfile, ResolvedRoute, ChatEvent, ParsedAIArgs
 from huddle_chat.ui import ChatLexer, SlashCompleter
 
@@ -173,23 +171,10 @@ class ChatApp:
         self.client_id = self.generate_client_id()
         self.presence_file_id = self.client_id
 
-        self.config_repository = ConfigRepository()
-        self.storage_service = StorageService(self)
-        self.memory_service = MemoryService(self)
-        self.ai_service = AIService(self)
-        self.agent_service = AgentService(self)
-        self.routing_service = RoutingService(self)
-        self.action_service = ActionService(self)
-        self.tool_service = ToolService(self)
-        self.command_ops_service = CommandOpsService(self)
-        self.help_service = HelpService(self)
-        self.playbook_service = PlaybookService(self)
-        self.explain_service = ExplainService(self)
-        self.runtime_service = RuntimeService(self)
-        self.ai_provider_clients: dict[str, ProviderClient] = {
-            "gemini": GeminiClient(),
-            "openai": OpenAIClient(),
-        }
+        from huddle_chat.container import ChatAppContainer
+
+        self.container = ChatAppContainer(app=self)
+        self.config_repository = self.container.config_repository()
 
         # Load Config
         config_data = self.load_config_data()
@@ -218,11 +203,24 @@ class ChatApp:
             self.base_dir = self.prompt_for_path()
 
         self.rooms_root = os.path.join(self.base_dir, "rooms")
-        self.message_repository = MessageRepository(self)
-        self.presence_repository = PresenceRepository(self)
-        self.memory_repository = MemoryRepository(self)
-        self.agent_repository = AgentRepository(self)
-        self.action_repository = ActionRepository(self)
+        self.message_repository = self.container.message_repository()
+        self.presence_repository = self.container.presence_repository()
+        self.memory_repository = self.container.memory_repository()
+        self.agent_repository = self.container.agent_repository()
+        self.action_repository = self.container.action_repository()
+        self.storage_service = self.container.storage_service()
+        self.memory_service = self.container.memory_service()
+        self.ai_service = self.container.ai_service()
+        self.agent_service = self.container.agent_service()
+        self.routing_service = self.container.routing_service()
+        self.action_service = self.container.action_service()
+        self.tool_service = self.container.tool_service()
+        self.command_ops_service = self.container.command_ops_service()
+        self.help_service = self.container.help_service()
+        self.playbook_service = self.container.playbook_service()
+        self.explain_service = self.container.explain_service()
+        self.runtime_service = self.container.runtime_service()
+        self.ai_provider_clients = self.container.ai_provider_clients()
         self.ai_config = self.load_ai_config_data()
         self.ensure_paths()
         self.ensure_local_paths()
@@ -241,11 +239,11 @@ class ChatApp:
 
         self.save_config()
 
-        self.event_bus = EventBus(maxsize=512, publish_timeout_seconds=0.1)
-        self.controller = ChatController(self)
+        self.event_bus = self.container.event_bus()
+        self.controller = self.container.controller()
         self.controller.register_event_handlers(self.event_bus)
         self.event_bus.start()
-        self.view = PromptToolkitView(self, on_submit=self.controller.handle_input)
+        self.view = self.container.view()
         self.output_field = self.view.output_field
         self.input_field = self.view.input_field
         self.sidebar_control = self.view.sidebar_control
@@ -967,6 +965,22 @@ class ChatApp:
             self.ai_cancel_event = Event()
 
     def ensure_repositories_initialized(self) -> None:
+        container = getattr(self, "container", None)
+        if container is not None:
+            if not hasattr(self, "config_repository"):
+                self.config_repository = container.config_repository()
+            if not hasattr(self, "message_repository"):
+                self.message_repository = container.message_repository()
+            if not hasattr(self, "presence_repository"):
+                self.presence_repository = container.presence_repository()
+            if not hasattr(self, "memory_repository"):
+                self.memory_repository = container.memory_repository()
+            if not hasattr(self, "agent_repository"):
+                self.agent_repository = container.agent_repository()
+            if not hasattr(self, "action_repository"):
+                self.action_repository = container.action_repository()
+            return
+
         if not hasattr(self, "config_repository"):
             self.config_repository = ConfigRepository()
         if not hasattr(self, "message_repository"):
@@ -982,35 +996,64 @@ class ChatApp:
 
     def ensure_services_initialized(self) -> None:
         self.ensure_repositories_initialized()
-        if not hasattr(self, "storage_service"):
-            self.storage_service = StorageService(self)
-        if not hasattr(self, "memory_service"):
-            self.memory_service = MemoryService(self)
-        if not hasattr(self, "ai_service"):
-            self.ai_service = AIService(self)
-        if not hasattr(self, "agent_service"):
-            self.agent_service = AgentService(self)
-        if not hasattr(self, "routing_service"):
-            self.routing_service = RoutingService(self)
-        if not hasattr(self, "action_service"):
-            self.action_service = ActionService(self)
-        if not hasattr(self, "tool_service"):
-            self.tool_service = ToolService(self)
-        if not hasattr(self, "command_ops_service"):
-            self.command_ops_service = CommandOpsService(self)
-        if not hasattr(self, "help_service"):
-            self.help_service = HelpService(self)
-        if not hasattr(self, "playbook_service"):
-            self.playbook_service = PlaybookService(self)
-        if not hasattr(self, "explain_service"):
-            self.explain_service = ExplainService(self)
-        if not hasattr(self, "runtime_service"):
-            self.runtime_service = RuntimeService(self)
-        if not hasattr(self, "ai_provider_clients"):
-            self.ai_provider_clients = {
-                "gemini": GeminiClient(),
-                "openai": OpenAIClient(),
-            }
+        container = getattr(self, "container", None)
+        if container is not None:
+            if not hasattr(self, "storage_service"):
+                self.storage_service = container.storage_service()
+            if not hasattr(self, "memory_service"):
+                self.memory_service = container.memory_service()
+            if not hasattr(self, "ai_service"):
+                self.ai_service = container.ai_service()
+            if not hasattr(self, "agent_service"):
+                self.agent_service = container.agent_service()
+            if not hasattr(self, "routing_service"):
+                self.routing_service = container.routing_service()
+            if not hasattr(self, "action_service"):
+                self.action_service = container.action_service()
+            if not hasattr(self, "tool_service"):
+                self.tool_service = container.tool_service()
+            if not hasattr(self, "command_ops_service"):
+                self.command_ops_service = container.command_ops_service()
+            if not hasattr(self, "help_service"):
+                self.help_service = container.help_service()
+            if not hasattr(self, "playbook_service"):
+                self.playbook_service = container.playbook_service()
+            if not hasattr(self, "explain_service"):
+                self.explain_service = container.explain_service()
+            if not hasattr(self, "runtime_service"):
+                self.runtime_service = container.runtime_service()
+            if not hasattr(self, "ai_provider_clients"):
+                self.ai_provider_clients = container.ai_provider_clients()
+        else:
+            if not hasattr(self, "storage_service"):
+                self.storage_service = StorageService(self)
+            if not hasattr(self, "memory_service"):
+                self.memory_service = MemoryService(self)
+            if not hasattr(self, "ai_service"):
+                self.ai_service = AIService(self)
+            if not hasattr(self, "agent_service"):
+                self.agent_service = AgentService(self)
+            if not hasattr(self, "routing_service"):
+                self.routing_service = RoutingService(self)
+            if not hasattr(self, "action_service"):
+                self.action_service = ActionService(self)
+            if not hasattr(self, "tool_service"):
+                self.tool_service = ToolService(self)
+            if not hasattr(self, "command_ops_service"):
+                self.command_ops_service = CommandOpsService(self)
+            if not hasattr(self, "help_service"):
+                self.help_service = HelpService(self)
+            if not hasattr(self, "playbook_service"):
+                self.playbook_service = PlaybookService(self)
+            if not hasattr(self, "explain_service"):
+                self.explain_service = ExplainService(self)
+            if not hasattr(self, "runtime_service"):
+                self.runtime_service = RuntimeService(self)
+            if not hasattr(self, "ai_provider_clients"):
+                self.ai_provider_clients = {
+                    "gemini": GeminiClient(),
+                    "openai": OpenAIClient(),
+                }
         if not hasattr(self, "pending_actions"):
             self.pending_actions = {}
         if not hasattr(self, "playbook_run_state"):
